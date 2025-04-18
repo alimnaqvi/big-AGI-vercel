@@ -34,12 +34,12 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import { ModelVendorAnthropic } from '~/modules/llms/vendors/anthropic/anthropic.vendor';
 
 import { AnthropicIcon } from '~/common/components/icons/vendors/AnthropicIcon';
-import { AudioGenerator } from '~/common/util/audio/AudioGenerator';
 import { ChatBeamIcon } from '~/common/components/icons/ChatBeamIcon';
 import { CloseablePopup } from '~/common/components/CloseablePopup';
 import { DMessage, DMessageId, DMessageUserFlag, DMetaReferenceItem, MESSAGE_FLAG_AIX_SKIP, MESSAGE_FLAG_NOTIFY_COMPLETE, MESSAGE_FLAG_STARRED, MESSAGE_FLAG_VND_ANT_CACHE_AUTO, MESSAGE_FLAG_VND_ANT_CACHE_USER, messageFragmentsReduceText, messageHasUserFlag } from '~/common/stores/chat/chat.message';
 import { KeyStroke } from '~/common/components/KeyStroke';
 import { MarkHighlightIcon } from '~/common/components/icons/MarkHighlightIcon';
+import { Release } from '~/common/app.release';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { adjustContentScaling, themeScalingMap, themeZIndexChatBubble } from '~/common/app.theme';
 import { avatarIconSx, makeMessageAvatarIcon, messageBackground, useMessageAvatarLabel } from '~/common/util/dMessageUtils';
@@ -456,8 +456,13 @@ export function ChatMessage(props: {
 
   // Bubble
 
-  const closeBubble = React.useCallback((anchorEl?: HTMLElement) => {
-    window.getSelection()?.removeAllRanges?.();
+  const closeBubble = React.useCallback((anchorEl?: HTMLElement, options?: { clearSelection?: boolean }) => {
+    // NOTE - we used to have this always on, which would remove the highlighted text, but it's fired too much and in particular
+    // it was corrupting the extension of text selection (http://github.com/enricoros/big-AGI/issues/788)
+    //
+    // However the likely expected user behavior here is to keep the selection, hence by default we don't clear it
+    if (options?.clearSelection)
+      window.getSelection()?.removeAllRanges?.();
     try {
       const anchor = anchorEl || bubbleAnchor;
       anchor && document.body.removeChild(anchor);
@@ -469,7 +474,7 @@ export function ChatMessage(props: {
   }, [bubbleAnchor]);
 
   // restore blocksRendererRef
-  const handleOpenBubble = React.useCallback((_event: MouseEvent) => {
+  const handleOpenBubble = React.useCallback((event?: MouseEvent | null) => {
     // check for selection
     const selection = window.getSelection();
     if (!selection || selection.rangeCount <= 0) return;
@@ -490,7 +495,10 @@ export function ChatMessage(props: {
     const anchorEl = document.createElement('div');
     anchorEl.style.position = 'fixed';
     anchorEl.style.left = `${firstRect.left + window.scrollX}px`;
-    anchorEl.style.top = `${firstRect.top + window.scrollY}px`;
+    anchorEl.style.top = !props.isMobile ? `${firstRect.top + window.scrollY}px` : `${firstRect.top + window.scrollY - 45}px`;
+    if (props.isMobile)
+      anchorEl.style.zIndex = '99999';  // Higher z-index to compete with native UI
+
     document.body.appendChild(anchorEl);
     anchorEl.setAttribute('role', 'dialog');
 
@@ -498,7 +506,7 @@ export function ChatMessage(props: {
     const closeOnUnselect = () => {
       const selection = window.getSelection();
       if (!selection || selection.toString().trim() === '') {
-        closeBubble(anchorEl);
+        closeBubble(anchorEl, { clearSelection: false });
         document.removeEventListener('selectionchange', closeOnUnselect);
       }
     };
@@ -506,6 +514,11 @@ export function ChatMessage(props: {
 
     setBubbleAnchor(anchorEl);
     setSelText(selectionText); /* TODO: operate on the underlying content, not the rendered text */
+  }, [closeBubble, props.isMobile]);
+
+  const handleBubbleClickAway = React.useCallback((event: MouseEvent | TouchEvent /* DOM, not React */) => {
+    if (!event.shiftKey)
+      closeBubble();
   }, [closeBubble]);
 
 
@@ -521,7 +534,22 @@ export function ChatMessage(props: {
   }, [doubleClickToEdit, handleOpsEditToggle, props.onMessageFragmentReplace]);
 
   const handleBlocksMouseUp = React.useCallback((event: React.MouseEvent) => {
+    // https://github.com/enricoros/big-AGI/issues/788
+    // If shift is pressed, it's a selection extension attempt. Let the browser handle it.
+    if (event.shiftKey)
+      return;
     handleOpenBubble(event.nativeEvent);
+  }, [handleOpenBubble]);
+
+  const handleBlocksTouchEnd = React.useCallback((event: React.TouchEvent) => {
+    if (event.shiftKey) return; // just to match the flow
+
+    // on mobile, allow for text-selection events to process, then open
+    setTimeout(() => {
+      const selection = window.getSelection();
+      if (selection && selection.toString().trim().length >= BUBBLE_MIN_TEXT_LENGTH)
+        handleOpenBubble(null);
+    }, 300);
   }, [handleOpenBubble]);
 
 
@@ -618,6 +646,7 @@ export function ChatMessage(props: {
       role='chat-message'
       tabIndex={-1 /* for shortcuts navigation */}
       onMouseUp={(ENABLE_BUBBLE && !fromSystem /*&& !isAssistantError*/) ? handleBlocksMouseUp : undefined}
+      onTouchEnd={(ENABLE_BUBBLE && !fromSystem /*&& !isAssistantError*/) ? handleBlocksTouchEnd : undefined}
       sx={listItemSx}
       // className={messagePendingIncomplete ? 'agi-border-4' /* CSS Effect while in progress */ : undefined}
     >
@@ -665,7 +694,7 @@ export function ChatMessage(props: {
             {/* Assistant (llm/function) name */}
             {fromAssistant && !zenMode && (
               <TooltipOutlined asLargePane enableInteractive title={messageAvatarTooltip} placement='bottom-start'>
-                <Typography level='body-xs' sx={messagePendingIncomplete ? messageAvatarLabelAnimatedSx : messageAvatarLabelSx}>
+                <Typography level='body-xs' sx={(messagePendingIncomplete && !Release.Features.LIGHTER_ANIMATIONS) ? messageAvatarLabelAnimatedSx : messageAvatarLabelSx}>
                   {messageAvatarLabel}
                 </Typography>
               </TooltipOutlined>
@@ -996,7 +1025,7 @@ export function ChatMessage(props: {
         <Popper placement='top-start' open={true} anchorEl={bubbleAnchor} slotProps={{
           root: { style: { zIndex: themeZIndexChatBubble } },
         }}>
-          <ClickAwayListener onClickAway={() => closeBubble()}>
+          <ClickAwayListener onClickAway={handleBubbleClickAway}>
             <ButtonGroup
               variant='plain'
               sx={{

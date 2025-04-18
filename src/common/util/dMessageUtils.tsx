@@ -340,6 +340,10 @@ function _prettyTokenStopReason(reason: DMessageGenerator['tokenStopReason'], co
 }
 
 
+const oaiORegex = /gpt-[345](?:o|\.\d+)?-|o[1345]-|chatgpt-4o|computer-use-/;
+const geminiRegex = /gemini-|gemma-|learnlm-/;
+
+
 /** Pretty name for a chat model ID - VERY HARDCODED - shall use the Avatar Label-style code instead */
 export function prettyShortChatModelName(model: string | undefined): string {
   if (!model) return '';
@@ -347,42 +351,34 @@ export function prettyShortChatModelName(model: string | undefined): string {
   // TODO: fully reform this function to be using information from the DLLM, rather than this manual mapping
 
   // [OpenAI]
-  if (model.endsWith('-o1')) return 'o1';
-  if (model.includes('o1-')) {
-    if (model.includes('o1-mini')) return 'o1 mini';
-    if (model.includes('o1-preview')) return 'o1 Preview';
-    return 'o1';
-  }
-  if (model.includes('o3-')) {
-    if (model.includes('o3-mini')) return 'o3 mini';
-    return 'o3';
-  }
-  if (model.includes('chatgpt-4o-latest')) return 'ChatGPT 4o';
-  if (model.includes('gpt-4')) {
-    if (model.includes('gpt-4o-mini')) {
-      if (model.includes('gpt-4o-mini-audio')) return 'GPT-4o mini Audio';
-      if (model.includes('gpt-4o-mini-realtime')) return 'GPT-4o mini Realtime';
-      if (model.includes('gpt-4o-mini-search')) return 'GPT-4o mini Search';
-      return 'GPT-4o mini';
-    }
-    if (model.includes('gpt-4o')) {
-      if (model.includes('gpt-4o-audio')) return 'GPT-4o Audio';
-      if (model.includes('gpt-4o-realtime')) return 'GPT-4o Realtime';
-      if (model.includes('gpt-4o-search')) return 'GPT-4o Search';
-      return 'GPT-4o';
-    }
-    if (model.includes('gpt-4.5')) return 'GPT-4.5';
-    if (model.includes('gpt-4-0125-preview')
-      || model.includes('gpt-4-1106-preview')
-      || model.includes('gpt-4-turbo')
-    ) return 'GPT-4 Turbo';
-    if (model.includes('gpt-4-32k')) return 'GPT-4-32k';
-    return 'GPT-4';
-  }
-  if (model.includes('gpt-3')) {
-    if (model.includes('gpt-3.5-turbo-instruct')) return 'GPT-3.5 Turbo Instruct';
-    if (model.includes('gpt-3.5-turbo')) return 'GPT-3.5 Turbo';
-    if (model.includes('gpt-35-turbo')) return 'GPT-3.5 Turbo';
+  let prefixIndex = model.search(oaiORegex);
+  if (prefixIndex !== -1) {
+    let cutModel = prefixIndex === -1 ? model : model.slice(prefixIndex);
+    // remove version: cut before the '-202..' if present
+    const versionIndex = cutModel.search(/-20\d{2}/);
+    if (versionIndex !== -1) cutModel = cutModel.slice(0, versionIndex);
+    return cutModel
+      .replace('chatgpt-', 'ChatGPT_')
+      .replace('gpt-', 'GPT_')
+      // feature variants
+      .replace('-audio', ' Audio')
+      .replace('-realtime-preview', ' Realtime')
+      .replace('-realtime', ' Realtime')
+      .replace('-search-preview', ' Search')
+      .replace('-search', ' Search')
+      .replace('-tts', ' TTS')
+      .replace('-turbo', ' Turbo')
+      // price variants
+      .replace('-pro', ' Pro')
+      .replace('-preview', ' (preview)')
+      // .replace('-latest', ' latest') // covered by catch-all
+      // size (covered by catch-all)
+      // .replace('-mini', ' mini')
+      // .replace('-micro', ' micro')
+      // .replace('-nano', ' nano')
+      // catch-all
+      .replaceAll('-', ' ')
+      .replaceAll('_', '-');
   }
   // [LocalAI?]
   if (model.endsWith('.bin')) return model.slice(0, -4);
@@ -400,12 +396,34 @@ export function prettyShortChatModelName(model: string | undefined): string {
   const prettyAnthropic = _prettyAnthropicModelName(model);
   if (prettyAnthropic) return prettyAnthropic;
   // [Gemini]
-  if (model.includes('gemini-')) {
-    return model.replaceAll('-', ' ')
+  prefixIndex = model.search(geminiRegex);
+  if (prefixIndex !== -1) {
+    let cutModel = prefixIndex === -1 ? model : model.slice(prefixIndex);
+    // Check for -NN-NN at the end (e.g., -05-15)
+    let datePattern = '';
+    const dateMatch = cutModel.match(/-(\d{2}-\d{2})$/);
+    if (dateMatch) {
+      datePattern = ' ' + dateMatch[1]; // extract '05-15'
+      cutModel = cutModel.slice(0, cutModel.length - dateMatch[0].length); // remove '-05-15'
+    }
+    const geminiName = cutModel
+      .replace('non-thinking', '') // NOTE: this is our variant, injected in gemini.models.ts
+      .replaceAll('-', ' ')
+      // products
       .replace('gemini', 'Gemini')
+      .replace('gemma', 'Gemma')
+      .replace('learnlm', 'LearnLM')
+      // price variants
       .replace('pro', 'Pro')
       .replace('flash', 'Flash')
-      .replace('thinking', 'Thinking');
+      // feature variants
+      .replace('generation', 'Gen')
+      .replace('image', 'Image')
+      .replace('thinking', 'Thinking')
+      .replace('preview', '')
+      .replace('experimental', 'exp')
+      .replace('exp', '(exp)');
+    return geminiName + datePattern;
   }
   // [Deepseek]
   if (model.includes('deepseek-')) {
@@ -432,9 +450,12 @@ export function prettyShortChatModelName(model: string | undefined): string {
   }
   // [xAI]
   if (model.includes('grok-')) {
-    if (model.includes('grok-3')) return 'Grok 3';
-    if (model.includes('grok-2-vision')) return 'Grok 2 Vision';
-    if (model.includes('grok-2')) return 'Grok 2';
+    if (model.includes('grok-3') || model.includes('grok-2')) {
+      return model
+        .replace('xai-', '')
+        .replace('-beta', '')
+        .split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
+    }
     if (model.includes('grok-beta')) return 'Grok Beta';
     if (model.includes('grok-vision-beta')) return 'Grok Vision Beta';
   }

@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { Box, IconButton, Sheet } from '@mui/joy';
+import { Box, IconButton, Sheet, Typography } from '@mui/joy';
 import ClearIcon from '@mui/icons-material/Clear';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import EditRoundedIcon from '@mui/icons-material/EditRounded';
@@ -39,11 +39,16 @@ const _styles = {
     alignItems: 'center',
     gap: 1,
   } as const,
+  titleBarIncognito: {
+    backgroundImage: 'repeating-linear-gradient(45deg, rgba(0,0,0,0.1), rgba(0,0,0,0.1) 10px, transparent 10px, transparent 20px)',
+    backgroundColor: 'neutral.solidBg',
+  } as const,
   title: {
     flex: 1,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+    cursor: 'pointer',
   } as const,
   toolButton: {
     '--IconButton-size': '1.5rem',
@@ -65,6 +70,7 @@ export function PaneTitleOverlay(props: {
   paneIdx: number,
   conversationId: DConversationId | null,
   isFocused: boolean,
+  isIncognito: boolean,
   onConversationDelete: (conversationIds: DConversationId[], bypassConfirmation: boolean) => void,
 }) {
 
@@ -128,7 +134,7 @@ export function PaneTitleOverlay(props: {
     <Sheet
       color={color}
       variant={variantO}
-      sx={_styles.tileBar}
+      sx={!props.isIncognito ? _styles.tileBar : { ..._styles.tileBar, ..._styles.titleBarIncognito }}
     >
       {/* Close Others*/}
       {/*<TooltipOutlined title='Close Other Tabs'>*/}
@@ -152,15 +158,19 @@ export function PaneTitleOverlay(props: {
             mx: { md: 1 },
           }}
         />
-      ) : hasTitle ? (
-        <Box sx={_styles.title} onDoubleClick={handleTitleEditBegin}>
+      ) : !!props.conversationId && <>
+        {hasTitle && <Box sx={_styles.title} onClick={handleTitleEditBegin}>
           {title}
-        </Box>
-      ) : !!props.conversationId && (
-        <IconButton title='Edit Chat Title' size='sm' color={color} variant={variantP} onClick={handleTitleEditBegin} sx={_styles.toolButton}>
-          <EditRoundedIcon sx={_styles.toolIcon} />
-        </IconButton>
-      )}
+        </Box>}
+        {!hasTitle && <Typography level='body-sm' fontStyle='italic' onClick={handleTitleEditBegin}>
+          untitled
+        </Typography>}
+        {!hasTitle && <TooltipOutlined title='Edit Chat Title'>
+          <IconButton title='' size='sm' color={color} variant={variantP} onClick={handleTitleEditBegin} sx={_styles.toolButton}>
+            <EditRoundedIcon sx={_styles.toolIcon} />
+          </IconButton>
+        </TooltipOutlined>}
+      </>}
 
       {/* Delete This */}
       {ENABLE_DELETE && hasTitle && !!props.conversationId && (
