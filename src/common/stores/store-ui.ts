@@ -44,6 +44,9 @@ interface UIPreferencesStore {
   showPersonaFinder: boolean;
   setShowPersonaFinder: (showPersonaFinder: boolean) => void;
 
+  composerQuickButton: 'off' | 'call' | 'beam';
+  setComposerQuickButton: (composerQuickButton: 'off' | 'call' | 'beam') => void;
+
   // UI Dismissals
 
   dismissals: Record<string, boolean>;
@@ -66,7 +69,7 @@ export const useUIPreferencesStore = create<UIPreferencesStore>()(
       preferredLanguage: BrowserLang.orUS,
       setPreferredLanguage: (preferredLanguage: string) => set({ preferredLanguage }),
 
-      centerMode: 'wide',
+      centerMode: 'full',
       setCenterMode: (centerMode: 'narrow' | 'wide' | 'full') => set({ centerMode }),
 
       complexityMode: 'pro',
@@ -97,6 +100,9 @@ export const useUIPreferencesStore = create<UIPreferencesStore>()(
       showPersonaFinder: false,
       setShowPersonaFinder: (showPersonaFinder: boolean) => set({ showPersonaFinder }),
 
+      composerQuickButton: 'call',
+      setComposerQuickButton: (composerQuickButton: 'off' | 'call' | 'beam') => set({ composerQuickButton }),
+
       // UI Dismissals
 
       dismissals: {},
@@ -123,8 +129,9 @@ export const useUIPreferencesStore = create<UIPreferencesStore>()(
       /* versioning:
        * 1: rename 'enterToSend' to 'enterIsNewline' (flip the meaning)
        * 2: new Big-AGI 2 defaults
+       * 3: centerMode: 'full' is the new default
        */
-      version: 2,
+      version: 3,
 
       migrate: (state: any, fromVersion: number): UIPreferencesStore => {
 
@@ -136,6 +143,11 @@ export const useUIPreferencesStore = create<UIPreferencesStore>()(
         if (state && fromVersion < 2) {
           state.contentScaling = 'sm';
           state.doubleClickToEdit = false;
+        }
+
+        // 3: centerMode: 'full' is the new default
+        if (state && fromVersion < 3) {
+          state.centerMode = 'full';
         }
 
         return state;

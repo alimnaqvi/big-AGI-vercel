@@ -2,14 +2,15 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
 import { createTRPCRouter, publicProcedure } from '~/server/trpc/trpc.server';
-import { env } from '~/server/env.mjs';
+import { env } from '~/server/env';
 import { fetchJsonOrTRPCThrow } from '~/server/trpc/trpc.router.fetchers';
 import { serverCapitalizeFirstLetter } from '~/server/wire';
 
-import { T2iCreateImageOutput, t2iCreateImagesOutputSchema } from '~/modules/t2i/t2i.server';
+import type { T2ICreateImageAsyncStreamOp } from '~/modules/t2i/t2i.server';
+import { heartbeatsWhileAwaiting } from '~/modules/aix/server/dispatch/heartbeatsWhileAwaiting';
 
 import { Brand } from '~/common/app.config';
-import { fixupHost } from '~/common/util/urlUtils';
+import { base64ToBlob, fixupHost } from '~/common/util/urlUtils';
 
 import { OpenAIWire_API_Images_Generations, OpenAIWire_API_Models_List, OpenAIWire_API_Moderations_Create } from '~/modules/aix/server/dispatch/wiretypes/openai.wiretypes';
 
@@ -17,6 +18,7 @@ import { ListModelsResponse_schema, ModelDescriptionSchema } from '../llm.server
 import { alibabaModelSort, alibabaModelToModelDescription } from './models/alibaba.models';
 import { azureDeploymentFilter, azureDeploymentToModelDescription, azureParseFromDeploymentsAPI } from './models/azure.models';
 import { deepseekModelFilter, deepseekModelSort, deepseekModelToModelDescription } from './models/deepseek.models';
+import { fastAPIHeuristic, fastAPIModels } from './models/fastapi.models';
 import { fireworksAIHeuristic, fireworksAIModelsToModelDescriptions } from './models/fireworksai.models';
 import { groqModelFilter, groqModelSortFn, groqModelToModelDescription } from './models/groq.models';
 import { lmStudioModelToModelDescription, localAIModelSortFn, localAIModelToModelDescription } from './models/models.data';
@@ -65,19 +67,71 @@ const listModelsInputSchema = z.object({
   access: openAIAccessSchema,
 });
 
+
+const _createImageConfigBase = z.object({
+  // prompt: z.string().max(32000),
+  count: z.number().min(1).max(10),
+  user: z.string().optional(),
+});
+
+// GPT Image
+const createImageConfigGI = _createImageConfigBase.extend({
+  model: z.literal('gpt-image-1'),
+  prompt: z.string().max(32000),
+  size: z.enum([/*'auto',*/ '1024x1024', '1536x1024', '1024x1536']),
+  quality: z.enum(['high', 'medium', 'low']).optional(),
+  background: z.enum(['auto', 'transparent', 'opaque']).optional(),
+  output_format: z.enum(['png', 'jpeg', 'webp']).optional(),
+  output_compression: z.number().min(0).max(100).int().optional(),
+  moderation: z.enum(['low', 'auto']).optional(),
+});
+
+// DALL-E 3
+const createImageConfigD3 = _createImageConfigBase.extend({
+  model: z.literal('dall-e-3'),
+  count: z.number().min(1).max(1), // DALL-E 3 only supports n=1
+  prompt: z.string().max(4000),
+  quality: z.enum(['standard', 'hd']),
+  size: z.enum(['1024x1024', '1792x1024', '1024x1792']),
+  style: z.enum(['vivid', 'natural']).optional(),
+  response_format: z.enum([/*'url',*/ 'b64_json']).optional(),
+});
+
+// DALL-E 2
+const createImageConfigD2 = _createImageConfigBase.extend({
+  model: z.literal('dall-e-2'),
+  prompt: z.string().max(1000),
+  quality: z.literal('standard').optional(),
+  size: z.enum(['256x256', '512x512', '1024x1024']),
+  response_format: z.enum([/*'url',*/ 'b64_json']).optional(),
+});
+
 const createImagesInputSchema = z.object({
   access: openAIAccessSchema,
-  // for this object sync with <> wireOpenAICreateImageRequestSchema
-  config: z.object({
-    prompt: z.string(),
-    count: z.number().min(1),
-    model: z.enum(['dall-e-2', 'dall-e-3' /*, 'stablediffusion' for [LocalAI] */]),
-    quality: z.enum(['standard', 'hd']),
-    responseFormat: z.enum(['url', 'b64_json']), /* udpated to directly match OpenAI's formats - shall have an intermediate representation instead? */
-    size: z.enum(['256x256', '512x512', '1024x1024', '1792x1024', '1024x1792']),
-    style: z.enum(['natural', 'vivid']),
-  }),
+  // for this object sync with <> OpenAIWire_API_Images_Generations.Request_schema
+  generationConfig: z.discriminatedUnion('model', [
+    createImageConfigGI,
+    createImageConfigD3,
+    createImageConfigD2,
+  ]),
+  editConfig: z.object({
+    /**
+     * This is the exact copy of AixWire_Parts.InlineImagePart_schema, but somehow we must keep
+     * this module separate for now, or we'll get circular dependencies during the build.
+     */
+    inputImages: z.array(z.object({
+      pt: z.literal('inline_image'),
+      mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+      base64: z.string(),
+    })),
+    maskImage: z.object({
+      pt: z.literal('inline_image'),
+      mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+      base64: z.string(),
+    }).optional(),
+  }).optional(),
 });
+
 
 const moderationInputSchema = z.object({
   access: openAIAccessSchema,
@@ -180,6 +234,10 @@ export const llmOpenAIRouter = createTRPCRouter({
           if (fireworksAIHeuristic(access.oaiHost))
             return { models: fireworksAIModelsToModelDescriptions(openAIModels) };
 
+          // [FastChat] make the best of the little info
+          if (fastAPIHeuristic(openAIModels))
+            return { models: fastAPIModels(openAIModels) };
+
           models = openAIModels
 
             // limit to only 'gpt' and 'non instruct' models
@@ -216,60 +274,128 @@ export const llmOpenAIRouter = createTRPCRouter({
   /* [OpenAI/LocalAI] images/generations */
   createImages: publicProcedure
     .input(createImagesInputSchema)
-    .output(t2iCreateImagesOutputSchema)
-    .mutation(async ({ input: { access, config } }) => {
+    .mutation(async function* ({ input }): AsyncGenerator<T2ICreateImageAsyncStreamOp> {
 
-      // Validate input
+      const { access, generationConfig: config, editConfig } = input;
+
+      // Determine if this is an edit request
+      const isEdit = !!editConfig?.inputImages?.length && config.model === 'gpt-image-1';
+
+      // validate input
+      if (isEdit && config.model !== 'gpt-image-1')
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Image editing is only supported for GPT Image models` });
       if (config.model === 'dall-e-3' && config.count > 1)
         throw new TRPCError({ code: 'BAD_REQUEST', message: `[OpenAI Issue] dall-e-3 model does not support more than 1 image` });
+      // if (config.model !== 'gpt-image-1' && (config.background || config.moderation || config.output_compression || config.output_format))
+      //   throw new TRPCError({ code: 'BAD_REQUEST', message: `[OpenAI Issue] background, moderation, output_compression, output_format are only supported for gpt-image-1` });
+      // if (config.model !== 'dall-e-3' && config.style)
+      //   throw new TRPCError({ code: 'BAD_REQUEST', message: `[OpenAI Issue] style is only supported for dall-e-3` });
 
-      // images/generations request body
-      const requestBody: OpenAIWire_API_Images_Generations.Request = {
-        prompt: config.prompt,
-        model: config.model,
-        n: config.count,
-        quality: config.quality,
-        response_format: config.responseFormat,
-        size: config.size,
-        style: config.style,
-        user: 'big-AGI',
-      };
 
-      // [LocalAI] Fix: LocalAI does not want the 'response_format' field
-      if (access.dialect === 'localai')
-        delete requestBody.response_format;
+      // Prepare request body (JSON for generation, FormData for edit)
+      let requestBody: OpenAIWire_API_Images_Generations.Request | FormData;
+      let genImageMimeType = 'image/png'; // assume as default
 
-      // create 1 image (dall-e-3 won't support more than 1, so better transfer the burden to the client)
-      const wireOpenAICreateImageOutput = await openaiPOSTOrThrow<OpenAIWire_API_Images_Generations.Response, OpenAIWire_API_Images_Generations.Request>(
-        access, null, requestBody, '/v1/images/generations',
+      if (!isEdit) {
+
+        const { count, ...restConfig } = config;
+        requestBody = {
+          ...restConfig, // includes response_format for dall-e-3 and dall-e-2 models
+          n: count,
+          user: config.user || 'Big-AGI',
+        };
+
+        // [LocalAI] Fix: LocalAI does not want the 'response_format' field
+        if (access.dialect === 'localai' && 'response_format' in requestBody)
+          delete requestBody['response_format'];
+
+        // auto-selects the output image mime type - or defaults to the first one
+        if (requestBody.output_format === 'jpeg')
+          genImageMimeType = 'image/jpeg';
+        else if (requestBody.output_format === 'webp')
+          genImageMimeType = 'image/webp';
+
+      } else {
+        requestBody = new FormData();
+
+        // append required & optional fields
+        const { prompt, model, count, quality, size, user } = config;
+        requestBody.append('prompt', prompt);
+        requestBody.append('model', model);
+        if (count > 1) requestBody.append('n', '' + count);
+        if (quality && (quality as string) !== 'auto') requestBody.append('quality', quality);
+        if (size && (size as string) !== 'auto') requestBody.append('size', size);
+        // if (model === 'dall-e-2') requestBody.append('response_format', 'b64_json');
+        requestBody.append('user', user || 'Big-AGI');
+
+        // append input images
+        const imagesCount = editConfig.inputImages.length;
+        for (let i = 0; i < imagesCount; i++) {
+          const { base64, mimeType } = editConfig.inputImages[i];
+          requestBody.append(
+            imagesCount === 1 ? 'image' : 'image[]',
+            base64ToBlob(base64, mimeType),
+            `image_${i}.${mimeType.split('/')[1] || 'png'}`, // important to be a unique filename
+          );
+        }
+
+        // append mask image if provided
+        if (editConfig.maskImage)
+          requestBody.append(
+            'mask',
+            base64ToBlob(editConfig.maskImage.base64, editConfig.maskImage.mimeType),
+            `mask.${editConfig.maskImage.mimeType.split('/')[1] || 'png'}`,
+          );
+      }
+
+      // -> state.started
+      yield { p: 'state', state: 'started' };
+
+      // -> heartbeats, while waiting for the generation response
+      const wireOpenAICreateImageOutput = yield* heartbeatsWhileAwaiting(
+        openaiPOSTOrThrow<OpenAIWire_API_Images_Generations.Response, OpenAIWire_API_Images_Generations.Request | FormData>(
+          access,
+          config.model,  // modelRefId not really needed for these endpoints
+          requestBody,
+          isEdit ? '/v1/images/edits' : '/v1/images/generations',
+        ),
       );
 
-      // common return fields
-      const [width, height] = config.size.split('x').map(nStr => parseInt(nStr));
+      // common image fields
+      const [width, height] = (config.size as any) === 'auto'
+        ? [1024, 1024] // NOTE: this is broken, bad assumption, but so that we don't throw an error
+        : config.size.split('x').map(nStr => parseInt(nStr));
       if (!width || !height) {
         console.error(`openai.router.createImages: invalid size ${config.size}`);
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `[OpenAI Issue] Invalid size ${config.size}` });
       }
-      const { count: _count, responseFormat: _responseFormat, prompt: origPrompt, ...parameters } = config;
+      const { count: _ignoreCount, prompt: origPrompt, ...parameters } = config;
 
-      // expect a single image and as URL
-      const generatedImages = OpenAIWire_API_Images_Generations.Response_schema.parse(wireOpenAICreateImageOutput).data;
-      return generatedImages.map((image): T2iCreateImageOutput => {
+      // parse the response and emit all images in the response
+      const { data: images, usage: tokens } = OpenAIWire_API_Images_Generations.Response_schema.parse(wireOpenAICreateImageOutput);
+      for (const image of images) {
         if (!('b64_json' in image))
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `[OpenAI Issue] Expected a b64_json, got a url` });
 
-        return {
-          mimeType: 'image/png',
-          base64Data: image.b64_json!,
-          altText: image.revised_prompt || origPrompt,
-          width,
-          height,
-          generatorName: config.model,
-          parameters: parameters,
-          generatedAt: new Date().toISOString(),
+        // -> createImage
+        yield {
+          p: 'createImage',
+          image: {
+            mimeType: genImageMimeType,
+            base64Data: image.b64_json!,
+            altText: image.revised_prompt || origPrompt,
+            width,
+            height,
+            ...(tokens?.input_tokens !== undefined ? { inputTokens: tokens.input_tokens } : {}),
+            ...(tokens?.output_tokens !== undefined ? { outputTokens: tokens.output_tokens } : {}),
+            generatorName: config.model,
+            parameters: parameters,
+            generatedAt: new Date().toISOString(),
+          },
         };
-      });
+      }
     }),
+
 
   /* [OpenAI] check for content policy violations */
   moderation: publicProcedure
@@ -634,7 +760,7 @@ async function openaiGETOrThrow<TOut extends object>(access: OpenAIAccessSchema,
   return await fetchJsonOrTRPCThrow<TOut>({ url, headers, name: `OpenAI/${serverCapitalizeFirstLetter(access.dialect)}` });
 }
 
-async function openaiPOSTOrThrow<TOut extends object, TPostBody extends object>(access: OpenAIAccessSchema, modelRefId: string | null, body: TPostBody, apiPath: string /*, signal?: AbortSignal*/): Promise<TOut> {
+async function openaiPOSTOrThrow<TOut extends object, TPostBody extends object | FormData>(access: OpenAIAccessSchema, modelRefId: string | null, body: TPostBody, apiPath: string /*, signal?: AbortSignal*/): Promise<TOut> {
   const { headers, url } = openAIAccess(access, modelRefId, apiPath);
   return await fetchJsonOrTRPCThrow<TOut, TPostBody>({ url, method: 'POST', headers, body, name: `OpenAI/${serverCapitalizeFirstLetter(access.dialect)}` });
 }

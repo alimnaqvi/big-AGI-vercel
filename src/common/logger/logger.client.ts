@@ -1,3 +1,5 @@
+import { maybeDebuggerBreak, serializeError } from '~/common/util/errorUtils';
+
 import type { ClientLogger, LogEntry, LogLevel, LogOptions, LogSource } from './logger.types';
 import { LoggerActions, useLoggerStore } from './store-logger';
 
@@ -85,12 +87,16 @@ class LoggerImplementation implements ClientLogger {
     // combine options
     const finalOptions = options || {};
     const finalSource = source || finalOptions.source || 'unknown';
-    const finalDetails = details || finalOptions.details;
+    const finalDetails = serializeError(details || finalOptions.details); // serializeError because otherwise 'Error' wouldn't be serializable, and would appear as {}
 
     // prepare actions - handle both options.action and options.actions
     let actions = finalOptions.actions || [];
     if (finalOptions.action && !actions.length)
       actions = [finalOptions.action];
+
+    // Add debugger break for error and critical levels
+    if ((level === 'error' || level === 'critical' || level === 'DEV') && !finalOptions.skipDebuggerBreak)
+      maybeDebuggerBreak();
 
     return this._actions._addEntry({
       level,

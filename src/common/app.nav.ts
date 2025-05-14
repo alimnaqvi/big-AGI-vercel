@@ -44,6 +44,7 @@ interface ItemBase {
 
 export interface NavItemApp extends ItemBase {
   type: 'app',
+  mobileName?: string,
   route: string,
   landingRoute?: string,  // specify a different route than the nextjs page router route, to land to
   barTitle?: string,      // set to override the name as the bar title (unless custom bar content is used)
@@ -56,6 +57,7 @@ export interface NavItemApp extends ItemBase {
   hideNav?: boolean
     | (() => boolean),    // set to hide the Nav bar (note: must have a way to navigate back)
   fullWidth?: boolean,    // set to true to override the user preference
+  pageBrighter?: boolean, // set to true to make the page brighter (.surface instead of .level1)
   isDev?: boolean,        // show a 'dev mode' badge
   _delete?: boolean,      // delete from the UI
 }

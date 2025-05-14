@@ -18,6 +18,7 @@ import type { DConversation, DConversationId } from '~/common/stores/chat/chat.c
 import type { OptimaBarControlMethods } from '~/common/layout/optima/bar/OptimaBarDropdown';
 import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
 import { ConversationsManager } from '~/common/chat-overlay/ConversationsManager';
+import { ErrorBoundary } from '~/common/components/ErrorBoundary';
 import { LLM_IF_ANT_PromptCaching, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
 import { OptimaDrawerIn, OptimaPanelIn, OptimaToolbarIn } from '~/common/layout/optima/portals/OptimaPortalsIn';
 import { PanelResizeInset } from '~/common/components/panes/GoodPanelResizeHandler';
@@ -33,7 +34,6 @@ import { gcChatImageAssets } from '~/common/stores/chat/chat.gc';
 import { getChatLLMId } from '~/common/stores/llms/store-llms';
 import { getConversation, getConversationSystemPurposeId, useConversation } from '~/common/stores/chat/store-chats';
 import { optimaActions, optimaOpenModels, optimaOpenPreferences } from '~/common/layout/optima/useOptima';
-import { themeBgAppChatComposer } from '~/common/app.theme';
 import { useFolderStore } from '~/common/stores/folders/store-chat-folders';
 import { useIsMobile, useIsTallScreen } from '~/common/components/useMatchMedia';
 import { useLLM } from '~/common/stores/llms/llms.hooks';
@@ -89,6 +89,8 @@ const chatMessageListSx: SxProps = {
 
 const chatBeamWrapperSx: SxProps = {
   flexGrow: 1,
+  // we added these after removing the minSize={20} (%) from the containing panel.
+  minWidth: '18rem',
   // minHeight: 'calc(100vh - 69px - var(--AGI-Nav-width))',
 };
 
@@ -96,11 +98,23 @@ const composerOpenSx: SxProps = {
   // NOTE: disabled on 2025-03-05: conflicts with the GlobalDragOverlay's
   // zIndex: 21, // just to allocate a surface, and potentially have a shadow
   minWidth: { md: 480 }, // don't get compresses too much on desktop
-  backgroundColor: themeBgAppChatComposer,
+  // backgroundColor: themeBgAppChatComposer, // inlined in the Composer
+  transition: 'background-color 0.5s ease-out',
   borderTop: `1px solid`,
   borderTopColor: 'rgba(var(--joy-palette-neutral-mainChannel, 99 107 116) / 0.4)',
   // hack: eats the bottom of the last message (as it has a 1px divider)
-  mt: '-1px',
+  // NOTE: commented on 2024-05-13, as other content was stepping on the border due to it and missing zIndex
+  // mt: '-1px',
+};
+
+const composerOpenMobileSx: SxProps = {
+  zIndex: 21, // allocates the surface, possibly enables shadow if we like
+  // backgroundColor: themeBgAppChatComposer, // inlined in the Composer
+  transition: 'background-color 0.5s ease-out',
+  borderTop: `1px solid`,
+  borderTopColor: 'rgba(var(--joy-palette-neutral-mainChannel, 99 107 116) / 0.4)',
+  pt: 0.5, // have some breathing room
+  // boxShadow: '0px -1px 8px -2px rgba(0, 0, 0, 0.4)',
 };
 
 const composerClosedSx: SxProps = {
@@ -164,10 +178,9 @@ export function AppChat() {
   }, [chatPanes]);
 
   const beamsOpens = useAreBeamsOpen(paneBeamStores);
-  const beamOpenStoreInFocusedPane = React.useMemo(() => {
-    const open = focusedPaneIndex !== null ? (beamsOpens?.[focusedPaneIndex] ?? false) : false;
-    return open ? paneBeamStores?.[focusedPaneIndex!] ?? null : null;
-  }, [beamsOpens, focusedPaneIndex, paneBeamStores]);
+  const beamOpenStoreInFocusedPane = focusedPaneIndex === null ? null
+    : !beamsOpens?.[focusedPaneIndex] ? null
+      : paneBeamStores?.[focusedPaneIndex] ?? null;
 
   const {
     // focused
@@ -188,7 +201,7 @@ export function AppChat() {
   // const focusedConversationWorkspaceId = workspaceForConversationIdentity(focusedPaneConversationId);
   //// const focusedConversationWorkspace = useWorkspaceIdForConversation(focusedPaneConversationId);
 
-  const { mayWork: capabilityHasT2I } = useCapabilityTextToImage();
+  const { mayWork: capabilityHasT2I, mayEdit: capabilityHasT2IEdit } = useCapabilityTextToImage();
 
   const activeFolderId = useFolderStore(({ enableFolders, folders }) => {
     const activeFolderId = enableFolders ? _activeFolderId : null;
@@ -346,9 +359,10 @@ export function AppChat() {
       useFolderStore.getState().addConversationToFolder(activeFolderId, conversationId);
 
     // focus the composer
-    composerTextAreaRef.current?.focus();
+    if (!isMobile)
+      composerTextAreaRef.current?.focus();
 
-  }, [activeFolderId, focusedPaneConversationId, handleOpenConversationInFocusedPane, prependNewConversation, recycleNewConversationId]);
+  }, [activeFolderId, focusedPaneConversationId, handleOpenConversationInFocusedPane, isMobile, prependNewConversation, recycleNewConversationId]);
 
   const handleConversationImportDialog = React.useCallback(() => setTradeConfig({ dir: 'import' }), []);
 
@@ -449,11 +463,11 @@ export function AppChat() {
   const barAltTitle = showAltTitleBar ? focusedChatTitle ?? 'No Chat' : null;
 
   const focusedBarContent = React.useMemo(() => beamOpenStoreInFocusedPane
-      ? <ChatBarAltBeam beamStore={beamOpenStoreInFocusedPane} isMobile={isMobile} />
+      ? <ChatBarAltBeam conversationTitle={focusedChatTitle ?? 'No Chat'} beamStore={beamOpenStoreInFocusedPane} isMobile={isMobile} />
       : (barAltTitle === null)
         ? <ChatBarDropdowns conversationId={focusedPaneConversationId} llmDropdownRef={llmDropdownRef} personaDropdownRef={personaDropdownRef} />
         : <ChatBarAltTitle conversationId={focusedPaneConversationId} conversationTitle={barAltTitle} />
-    , [barAltTitle, beamOpenStoreInFocusedPane, focusedPaneConversationId, isMobile],
+    , [barAltTitle, beamOpenStoreInFocusedPane, focusedChatTitle, focusedPaneConversationId, isMobile],
   );
 
 
@@ -614,7 +628,7 @@ export function AppChat() {
         const _panesCount = chatPanes.length;
         const _keyAndId = `chat-pane-${pane.paneId}`;
         const _sepId = `sep-pane-${idx}`;
-        return <WorkspaceIdProvider conversationId={_paneIsFocused ? _paneConversationId : null} key={_keyAndId}>
+        return <WorkspaceIdProvider conversationId={_paneIsFocused ? _paneConversationId : null} key={_keyAndId}><ErrorBoundary>
 
           <Panel
             id={_keyAndId}
@@ -726,7 +740,7 @@ export function AppChat() {
             </PanelResizeHandle>
           )}
 
-        </WorkspaceIdProvider>;
+        </ErrorBoundary></WorkspaceIdProvider>;
       })}
 
     </PanelGroup>
@@ -737,13 +751,14 @@ export function AppChat() {
       composerTextAreaRef={composerTextAreaRef}
       targetConversationId={focusedPaneConversationId}
       capabilityHasT2I={capabilityHasT2I}
+      capabilityHasT2IEdit={capabilityHasT2IEdit}
       isMulticast={!isMultiConversationId ? null : isComposerMulticast}
       isDeveloperMode={isFocusedChatDeveloper}
       onAction={handleComposerAction}
       onConversationsImportFromFiles={handleConversationsImportFromFiles}
       onTextImagine={handleImagineFromText}
       setIsMulticast={setIsComposerMulticast}
-      sx={beamOpenStoreInFocusedPane ? composerClosedSx : composerOpenSx}
+      sx={beamOpenStoreInFocusedPane ? composerClosedSx : isMobile ? composerOpenMobileSx : composerOpenSx}
     />
 
     {/* Diagrams */}
