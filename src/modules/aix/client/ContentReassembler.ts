@@ -1,10 +1,11 @@
-import { addDBImageAsset } from '~/modules/dblobs/dblobs.images';
+import { addDBImageAsset } from '~/common/stores/blob/dblobs-portability';
 
 import type { MaybePromise } from '~/common/types/useful.types';
 import { DEFAULT_ADRAFT_IMAGE_MIMETYPE } from '~/common/attachment-drafts/attachment.pipeline';
-import { convertBase64Image, getImageDimensions } from '~/common/util/imageUtils';
+import { convert_Base64WithMimeType_To_Blob } from '~/common/util/blobUtils';
 import { create_CodeExecutionInvocation_ContentFragment, create_CodeExecutionResponse_ContentFragment, create_FunctionCallInvocation_ContentFragment, createAnnotationsVoidFragment, createDMessageDataRefDBlob, createDVoidWebCitation, createErrorContentFragment, createImageContentFragment, createModelAuxVoidFragment, createTextContentFragment, DVoidModelAuxPart, isContentFragment, isModelAuxPart, isTextContentFragment, isVoidAnnotationsFragment, isVoidFragment } from '~/common/stores/chat/chat.fragments';
 import { ellipsizeMiddle } from '~/common/util/textUtils';
+import { imageBlobTransform } from '~/common/util/imageUtils';
 import { metricsFinishChatGenerateLg, metricsPendChatGenerateLg } from '~/common/stores/metrics/metrics.chatgenerate';
 import { presentErrorToHumans } from '~/common/util/errorUtils';
 
@@ -222,6 +223,9 @@ export class ContentReassembler {
           case 'cer':
             this.onAddCodeExecutionResponse(op);
             break;
+          case 'ia':
+            await this.onAppendInlineAudio(op);
+            break;
           case 'ii':
             await this.onAppendInlineImage(op);
             break;
@@ -386,50 +390,118 @@ export class ContentReassembler {
     this.currentTextFragmentIndex = null;
   }
 
+  private async onAppendInlineAudio(particle: Extract<AixWire_Particles.PartParticleOp, { p: 'ia' }>): Promise<void> {
+
+    // Break text accumulation, as we have a full audio part in the middle
+    this.currentTextFragmentIndex = null;
+
+    const { mimeType, a_b64: base64Data, label, generator, durationMs } = particle;
+    const safeLabel = label || 'Generated Audio';
+
+    try {
+
+      // create blob and play audio - this will throw on malformed data
+      const audioBlob = await convert_Base64WithMimeType_To_Blob(base64Data, mimeType, 'ContentReassembler.onAppendInlineAudio');
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      // Play the audio
+      const audio = new Audio(audioUrl);
+
+      // Clean up when audio ends or errors
+      const cleanup = () => {
+        URL.revokeObjectURL(audioUrl);
+        audio.removeEventListener('ended', cleanup);
+        audio.removeEventListener('error', cleanup);
+        audio.src = ''; // Release audio element reference
+      };
+      audio.addEventListener('ended', cleanup);
+      audio.addEventListener('error', cleanup);
+
+      // Play and handle immediate errors
+      audio.play().catch(error => {
+        console.warn('[Audio] Failed to play generated audio:', error);
+        cleanup();
+      });
+
+      // TEMP: show a label instead of adding the model part
+      this.accumulator.fragments.push(createTextContentFragment(`Playing ${safeLabel}${durationMs ? ` (${Math.round(durationMs / 10) / 100}s)` : ''}`));
+
+      // Add the audio to the DBlobs DB
+      // const dblobAssetId = await addDBAudioAsset('global', 'app-chat', {
+      //   label: safeLabel,
+      //   data: {
+      //     mimeType: mimeType as any,
+      //     base64: base64Data,
+      //   },
+      //   origin: {
+      //     ot: 'generated',
+      //     source: 'ai-text-to-speech',
+      //     generatorName: generator ?? '',
+      //     prompt: '', // Audio doesn't have a prompt in this context
+      //     parameters: {},
+      //     generatedAt: new Date().toISOString(),
+      //   },
+      //   metadata: {
+      //     durationMs: durationMs || 0,
+      //     // Other audio metadata could be added here
+      //   },
+      // });
+
+      // Create DMessage data reference for the audio
+      // const bytesSizeApprox = Math.ceil((base64Data.length * 3) / 4);
+      // const audioAssetDataRef = createDMessageDataRefDBlob(
+      //   dblobAssetId,
+      //   particle.mimeType,
+      //   bytesSizeApprox,
+      // );
+
+      // Create the DMessageContentFragment for audio
+      // const audioContentFragment = createAudioContentFragment(
+      //   audioAssetDataRef,
+      //   safeLabel,
+      //   durationMs,
+      // );
+
+      // this.accumulator.fragments.push(audioContentFragment);
+
+    } catch (error: any) {
+      console.warn('[DEV] Failed to add inline audio to DBlobs:', { label: safeLabel, error, mimeType, size: base64Data.length });
+      // Add an error fragment instead
+      this.accumulator.fragments.push(createErrorContentFragment(`Failed to process audio: ${error?.message || 'Unknown error'}`));
+    }
+  }
+
   private async onAppendInlineImage(particle: Extract<AixWire_Particles.PartParticleOp, { p: 'ii' }>): Promise<void> {
 
     // Break text accumulation, as we have a full image part in the middle
     this.currentTextFragmentIndex = null;
 
-    let { mimeType, i_b64: base64Data, label, generator, prompt } = particle;
+    let { i_b64: inputBase64, mimeType: inputType, label, generator, prompt } = particle;
     const safeLabel = label || 'Generated Image';
 
     try {
 
-      let safeWidth;
-      let safeHeight;
+      // base64 -> blob conversion
+      let inputImage = await convert_Base64WithMimeType_To_Blob(inputBase64, inputType, 'ContentReassembler.onAppendInlineImage');
 
-      // TODO: re-evaluate conversion-before-storage (quality is 0.98 and WebP is really optimized, but still, this is not the 'original' data)
-      // PNG -> conversion to WebP or JPEG to save IndexedDB space - will
-      if (GENERATED_IMAGES_CONVERT_TO_COMPRESSED && mimeType === 'image/png') {
-        const preSize = base64Data.length;
-        const convertedData = await convertBase64Image(`data:${mimeType};base64,${base64Data}`, DEFAULT_ADRAFT_IMAGE_MIMETYPE, GENERATED_IMAGES_COMPRESSION_QUALITY).catch(() => null);
-        if (convertedData) {
-          mimeType = convertedData.mimeType;
-          base64Data = convertedData.base64;
-          safeWidth = convertedData.width || 0;
-          safeHeight = convertedData.height || 0;
-        }
-        const postSize = base64Data.length;
-        const sizeDiffPerc = preSize ? Math.round(((postSize - preSize) / preSize) * 100) : 0;
-        console.warn(`[image-pipeline] stored generated PNG as ${mimeType} (quality:${GENERATED_IMAGES_COMPRESSION_QUALITY}, ${sizeDiffPerc}% reduction, ${preSize?.toLocaleString()} -> ${postSize?.toLocaleString()})`);
-      }
-
-      // find out the dimensions (frontend)
-      if (!safeWidth || !safeHeight) {
-        const dimensions = await getImageDimensions(`data:${mimeType};base64,${base64Data}`).catch(() => null);
-        safeWidth = dimensions?.width || 0;
-        safeHeight = dimensions?.height || 0;
-      }
+      // perform resize/type conversion if desired, and find the image dimensions
+      const shallConvert = GENERATED_IMAGES_CONVERT_TO_COMPRESSED && inputType === 'image/png';
+      const { blob: imageBlob, height: imageHeight, width: imageWidth } = await imageBlobTransform(inputImage, {
+        convertToMimeType: shallConvert ? DEFAULT_ADRAFT_IMAGE_MIMETYPE : undefined,
+        convertToLossyQuality: GENERATED_IMAGES_COMPRESSION_QUALITY,
+        throwOnTypeConversionError: true,
+        debugConversionLabel: `ContentReassembler(ii)`,
+      });
 
       // add the image to the DBlobs DB
-      const dblobAssetId = await addDBImageAsset('global', 'app-chat', {
+      const dblobAssetId = await addDBImageAsset('app-chat', imageBlob, {
         label: safeLabel,
-        data: {
-          mimeType: mimeType as any,
-          base64: base64Data,
+        metadata: {
+          width: imageWidth,
+          height: imageHeight,
+          // description: '',
         },
-        origin: {
+        origin: { // Generation originated
           ot: 'generated',
           source: 'ai-text-to-image',
           generatorName: generator ?? '',
@@ -437,33 +509,24 @@ export class ContentReassembler {
           parameters: {}, // ?
           generatedAt: new Date().toISOString(),
         },
-        metadata: {
-          width: safeWidth,
-          height: safeHeight,
-          // description: '',
-        },
       });
 
-      // create DMessage a data reference {} for the image
-      const bytesSizeApprox = Math.ceil((base64Data.length * 3) / 4);
-      const imageAssetDataRef = createDMessageDataRefDBlob(
-        dblobAssetId,
-        particle.mimeType,
-        bytesSizeApprox,
-      );
-
-      // create the DMessageContentFragment - not attachment! as this comes from the assistant - so this is akin to the t2i-generated images
+      // create the DMessage _Content_ Fragment (not attachment), as this comes from the assistant
+      // so this is akin to the t2i-generated images
       const imageContentFragment = createImageContentFragment(
-        imageAssetDataRef,
+        createDMessageDataRefDBlob( // Data Reference {} for the image
+          dblobAssetId,
+          imageBlob.type,
+          imageBlob.size,
+        ),
         safeLabel,
-        safeWidth,
-        safeHeight,
+        imageWidth || undefined,
+        imageHeight || undefined,
       );
 
       this.accumulator.fragments.push(imageContentFragment);
-
     } catch (error: any) {
-      console.warn('[DEV] Failed to add inline image to DBlobs:', { label, error, mimeType, size: base64Data.length });
+      console.warn('[DEV] Failed to add inline image to DBlobs:', { label, error, inputType, base64Length: inputBase64.length });
     }
   }
 

@@ -59,6 +59,7 @@ export function ScratchClip() {
       open={isVisible}
       onClose={handleClose}
       titleStartDecorator={<HistoryIcon />}
+      unfilterBackdrop
       title={
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
 
@@ -84,7 +85,7 @@ export function ScratchClip() {
       {/* Content */}
       {!history.length ? (
         <Typography sx={{ p: 3, textAlign: 'center' }}>
-          Clipboard history is empty.
+          Local clipboard history is empty.
         </Typography>
       ) : (
         <List
