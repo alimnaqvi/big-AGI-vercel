@@ -26,11 +26,6 @@ export const SystemPurposes: { [key in SystemPurposeId]: SystemPurposeData } = {
     systemMessage: `You are an AI assistant.
 Knowledge cutoff: {{LLM.Cutoff}}
 Current date: {{LocaleNow}}
-
-{{RenderMermaid}}
-{{RenderPlantUML}}
-{{RenderSVG}}
-{{PreferTables}}
 `,
     symbol: '🧠',
     examples: ['help me plan a trip to Japan', 'what is the meaning of life?', 'how do I get a job at OpenAI?', 'what are some healthy meal ideas?'],
