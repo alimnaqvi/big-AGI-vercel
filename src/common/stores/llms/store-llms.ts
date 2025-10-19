@@ -246,7 +246,7 @@ export const useModelsStore = create<LlmsStore>()(persist(
     /* versioning:
      *  1: adds maxOutputTokens (default to half of contextTokens)
      *  2: large changes on all LLMs, and reset chat/fast/func LLMs
-     *  3: big-AGI v2
+     *  3: big-AGI v2.x upgrade
      *  4: migrate .options to .initialParameters/.userParameters
      *  4B: we changed from .chatLLMId/.fastLLMId to modelAssignments: {}, without expicit migration (done on rehydrate, and for no particular reason)
      */
@@ -271,7 +271,7 @@ export const useModelsStore = create<LlmsStore>()(persist(
         }
       }
 
-      // 2 -> 3: big-AGI v2: update all models for pricing info
+      // 2 -> 3: big-AGI v2.x upgrade: update all models for pricing info
       if (fromVersion < 3) {
         try {
           state.llms.forEach(portModelPricingV2toV3);
@@ -324,12 +324,12 @@ export const useModelsStore = create<LlmsStore>()(persist(
           const prevState = state as { chatLLMId?: DLLMId, fastLLMId?: DLLMId };
           const existingAssignments: Partial<Record<DModelDomainId, DModelConfiguration>> = {};
           if (prevState.chatLLMId) {
-            existingAssignments['primaryChat'] = createDModelConfiguration('primaryChat', prevState.chatLLMId);
-            existingAssignments['codeApply'] = createDModelConfiguration('codeApply', prevState.chatLLMId);
+            existingAssignments['primaryChat'] = createDModelConfiguration('primaryChat', prevState.chatLLMId, undefined);
+            existingAssignments['codeApply'] = createDModelConfiguration('codeApply', prevState.chatLLMId, undefined);
             delete prevState.chatLLMId;
           }
           if (prevState.fastLLMId) {
-            existingAssignments['fastUtil'] = createDModelConfiguration('fastUtil', prevState.fastLLMId);
+            existingAssignments['fastUtil'] = createDModelConfiguration('fastUtil', prevState.fastLLMId, undefined);
             delete prevState.fastLLMId;
           }
 

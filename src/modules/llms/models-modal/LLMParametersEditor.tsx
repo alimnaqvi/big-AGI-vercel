@@ -28,11 +28,17 @@ const _reasoningEffort4Options = [
   { value: 'minimal', label: 'Minimal', description: 'Fastest, cheapest, least reasoning' } as const,
   { value: _UNSPECIFIED, label: 'Default', description: 'Default value (unset)' } as const,
 ] as const;
+const _verbosityOptions = [
+  { value: 'high', label: 'Detailed', description: 'Thorough responses, great for audits' } as const,
+  { value: 'medium', label: 'Balanced', description: 'Standard detail level (default)' } as const,
+  { value: 'low', label: 'Brief', description: 'Concise responses' } as const,
+  { value: _UNSPECIFIED, label: 'Default', description: 'Default value (unset)' } as const,
+] as const;
 const _webSearchContextOptions = [
   { value: 'high', label: 'Comprehensive', description: 'Largest, highest cost, slower' } as const,
   { value: 'medium', label: 'Medium', description: 'Balanced context, cost, and speed' } as const,
   { value: 'low', label: 'Low', description: 'Smallest, cheapest, fastest' } as const,
-  { value: _UNSPECIFIED, label: 'Default', description: 'Default value (unset)' } as const,
+  { value: _UNSPECIFIED, label: 'Off', description: 'Default (disabled)' } as const,
 ] as const;
 const _perplexitySearchModeOptions = [
   { value: _UNSPECIFIED, label: 'Default', description: 'General web sources' },
@@ -46,10 +52,50 @@ const _perplexityDateFilterOptions = [
   { value: '1y', label: 'Last Year', description: 'Results from last 12 months' },
 ] as const;
 
+const _geminiAspectRatioOptions = [
+  { value: _UNSPECIFIED, label: 'Auto', description: 'Model decides' },
+  { value: '1:1', label: '1:1', description: 'Square' },
+  { value: '2:3', label: '2:3', description: 'Portrait' },
+  { value: '3:2', label: '3:2', description: 'Landscape' },
+  { value: '3:4', label: '3:4', description: 'Portrait' },
+  { value: '4:3', label: '4:3', description: 'Landscape' },
+  { value: '9:16', label: '9:16', description: 'Tall portrait' },
+  { value: '16:9', label: '16:9', description: 'Wide landscape' },
+  { value: '21:9', label: '21:9', description: 'Ultra wide' },
+] as const;
+
+const _geminiGoogleSearchOptions = [
+  { value: 'unfiltered', label: 'On', description: 'Web Search' },
+  { value: '1d', label: 'Last Day', description: 'Last 24 hours' },
+  { value: '1w', label: 'Last Week', description: 'Recent results' },
+  { value: '1m', label: 'Last Month', description: 'Results from last month' },
+  { value: '1y', label: 'Last Year', description: 'Results since last year' },
+  // { value: '6m', label: 'Last 6 Months', description: 'Results from last 6 months' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Default (disabled)' },
+] as const;
+
 const _xaiSearchModeOptions = [
   { value: 'auto', label: 'Auto', description: 'Model decides (default)' },
   { value: 'on', label: 'On', description: 'Always search active sources' },
   { value: 'off', label: 'Off', description: 'Never perform a search' },
+] as const;
+
+const _antWebSearchOptions = [
+  { value: 'auto', label: 'On', description: 'Enable web search for real-time information' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
+const _antWebFetchOptions = [
+  { value: 'auto', label: 'On', description: 'Enable fetching web content and PDFs' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
+const _imageGenerationOptions = [
+  { value: _UNSPECIFIED, label: 'Off', description: 'Default (disabled)' },
+  { value: 'mq', label: 'Standard', description: 'Quick gen' },
+  { value: 'hq', label: 'High Quality', description: 'Best looks' },
+  { value: 'hq_edit', label: 'Precise Edits', description: 'Controlled' },
+  // { value: 'hq_png', label: 'HD PNG', description: 'Uncompressed' }, // TODO: re-enable when uncompressed PNG saving is implemented
 ] as const;
 
 const _xaiDateFilterOptions = [
@@ -96,6 +142,10 @@ export function LLMParametersEditor(props: {
     llmTemperature = FALLBACK_LLM_PARAM_TEMPERATURE, // fallback for undefined, result is number | null
     llmForceNoStream,
     llmVndAntThinkingBudget,
+    llmVndAntWebSearch,
+    llmVndAntWebFetch,
+    llmVndGeminiAspectRatio,
+    llmVndGeminiGoogleSearch,
     llmVndGeminiShowThoughts,
     llmVndGeminiThinkingBudget,
     llmVndOaiReasoningEffort,
@@ -103,6 +153,8 @@ export function LLMParametersEditor(props: {
     llmVndOaiRestoreMarkdown,
     llmVndOaiWebSearchContext,
     llmVndOaiWebSearchGeolocation,
+    llmVndOaiImageGeneration,
+    llmVndOaiVerbosity,
     llmVndPerplexityDateFilter,
     llmVndPerplexitySearchMode,
     llmVndXaiSearchMode,
@@ -212,6 +264,45 @@ export function LLMParametersEditor(props: {
       />
     )}
 
+    {showParam('llmVndAntWebSearch') && (
+      <FormSelectControl
+        title='Web Search'
+        tooltip='Enable web search for real-time information retrieval'
+        value={llmVndAntWebSearch ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value || value === 'off') onRemoveParameter('llmVndAntWebSearch');
+          else onChangeParameter({ llmVndAntWebSearch: value });
+        }}
+        options={_antWebSearchOptions}
+      />
+    )}
+
+    {showParam('llmVndAntWebFetch') && (
+      <FormSelectControl
+        title='Web Fetch'
+        tooltip='Enable fetching full content from web pages and PDF documents'
+        value={llmVndAntWebFetch ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value || value === 'off') onRemoveParameter('llmVndAntWebFetch');
+          else onChangeParameter({ llmVndAntWebFetch: value });
+        }}
+        options={_antWebFetchOptions}
+      />
+    )}
+
+    {showParam('llmVndGeminiAspectRatio') && (
+      <FormSelectControl
+        title='Aspect Ratio'
+        tooltip='Controls the aspect ratio of generated images'
+        value={llmVndGeminiAspectRatio ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiAspectRatio');
+          else onChangeParameter({ llmVndGeminiAspectRatio: value });
+        }}
+        options={_geminiAspectRatioOptions}
+      />
+    )}
+
     {showParam('llmVndGeminiShowThoughts') && (
       <FormSwitchControl
         title='Show Chain of Thought'
@@ -255,6 +346,19 @@ export function LLMParametersEditor(props: {
             </IconButton>
           </Tooltip>
         }
+      />
+    )}
+
+    {showParam('llmVndGeminiGoogleSearch') && (
+      <FormSelectControl
+        title='Google Search'
+        // tooltip='Enable Google Search grounding to ground responses in real-time web content. Optionally filter results by publication date.'
+        value={llmVndGeminiGoogleSearch ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiGoogleSearch');
+          else onChangeParameter({ llmVndGeminiGoogleSearch: value });
+        }}
+        options={_geminiGoogleSearchOptions}
       />
     )}
 
@@ -351,6 +455,36 @@ export function LLMParametersEditor(props: {
             onChangeParameter({ llmVndOaiReasoningEffort4: value });
         }}
         options={_reasoningEffort4Options}
+      />
+    )}
+
+    {showParam('llmVndOaiVerbosity') && (
+      <FormSelectControl
+        title='Verbosity'
+        tooltip='Controls response length and detail level'
+        value={llmVndOaiVerbosity ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value)
+            onRemoveParameter('llmVndOaiVerbosity');
+          else
+            onChangeParameter({ llmVndOaiVerbosity: value });
+        }}
+        options={_verbosityOptions}
+      />
+    )}
+
+    {showParam('llmVndOaiImageGeneration') && (
+      <FormSelectControl
+        title='Image Generation'
+        tooltip='Configure image generation mode and quality'
+        value={llmVndOaiImageGeneration ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value)
+            onRemoveParameter('llmVndOaiImageGeneration');
+          else
+            onChangeParameter({ llmVndOaiImageGeneration: value });
+        }}
+        options={_imageGenerationOptions}
       />
     )}
 

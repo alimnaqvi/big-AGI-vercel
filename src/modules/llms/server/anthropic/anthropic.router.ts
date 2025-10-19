@@ -42,6 +42,14 @@ const DEFAULT_ANTHROPIC_BETA_FEATURES: string[] = [
    */
   'prompt-caching-2024-07-31',
 
+  /**
+   * Enables model_context_window_exceeded stop reason for models earlier than Sonnet 4.5
+   * (Sonnet 4.5+ have this by default). This allows requesting max tokens without calculating
+   * input size, and the API will return as much as possible within the context window.
+   * https://docs.claude.com/en/api/handling-stop-reasons#model-context-window-exceeded
+   */
+  // 'model-context-window-exceeded-2025-08-26',
+
   // now default
   // 'messages-2023-12-15'
 ] as const;
@@ -70,16 +78,28 @@ const PER_MODEL_BETA_FEATURES: { [modelId: string]: string[] } = {
   ] as const,
 } as const;
 
-function _anthropicHeaders(modelId?: string): HeadersInit {
+type AnthropicHeaderOptions = {
+  modelIdForBetaFeatures?: string;
+  vndAntWebFetch?: boolean;
+};
+
+function _anthropicHeaders(options?: AnthropicHeaderOptions): Record<string, string> {
 
   // accumulate the beta features
   const betaFeatures = [...DEFAULT_ANTHROPIC_BETA_FEATURES];
-  if (modelId) {
+  if (options?.modelIdForBetaFeatures) {
     // string search (.includes) within the keys, to be more resilient to modelId changes/prefixing
     for (const [key, value] of Object.entries(PER_MODEL_BETA_FEATURES))
-      if (key.includes(modelId))
+      if (key.includes(options.modelIdForBetaFeatures))
         betaFeatures.push(...value);
   }
+
+  // Add beta feature for web-fetch if enabled
+  // Note: web-fetch-2025-09-10 is documented in official API docs but not yet in TypeScript SDK types
+  if (options?.vndAntWebFetch)
+    betaFeatures.push('web-fetch-2025-09-10');
+
+  // Note: web-search is now GA and no longer requires a beta header
 
   return {
     ...DEFAULT_ANTHROPIC_HEADERS,
@@ -91,7 +111,7 @@ function _anthropicHeaders(modelId?: string): HeadersInit {
 // Mappers
 
 async function anthropicGETOrThrow<TOut extends object>(access: AnthropicAccessSchema, antModelIdForBetaFeatures: undefined | string, apiPath: string /*, signal?: AbortSignal*/): Promise<TOut> {
-  const { headers, url } = anthropicAccess(access, antModelIdForBetaFeatures, apiPath);
+  const { headers, url } = anthropicAccess(access, apiPath, { modelIdForBetaFeatures: antModelIdForBetaFeatures });
   return await fetchJsonOrTRPCThrow<TOut>({ url, headers, name: 'Anthropic' });
 }
 
@@ -100,7 +120,7 @@ async function anthropicGETOrThrow<TOut extends object>(access: AnthropicAccessS
 //   return await fetchJsonOrTRPCThrow<TOut, TPostBody>({ url, method: 'POST', headers, body, name: 'Anthropic' });
 // }
 
-export function anthropicAccess(access: AnthropicAccessSchema, antModelIdForBetaFeatures: undefined | string, apiPath: string): { headers: HeadersInit, url: string } {
+export function anthropicAccess(access: AnthropicAccessSchema, apiPath: string, options?: AnthropicHeaderOptions): { headers: HeadersInit, url: string } {
   // API key
   const anthropicKey = access.anthropicKey || env.ANTHROPIC_API_KEY || '';
 
@@ -127,7 +147,7 @@ export function anthropicAccess(access: AnthropicAccessSchema, antModelIdForBeta
     headers: {
       'Accept': 'application/json',
       'Content-Type': 'application/json',
-      ..._anthropicHeaders(antModelIdForBetaFeatures),
+      ..._anthropicHeaders(options),
       'X-API-Key': anthropicKey,
       ...(heliKey && { 'Helicone-Auth': `Bearer ${heliKey}` }),
     },
@@ -180,15 +200,15 @@ export const llmAnthropicRouter = createTRPCRouter({
           if (!hardcodedModel.created && model.created_at)
             hardcodedModel.created = roundTime(model.created_at);
 
-          // add the base model
-          acc.push(hardcodedModel);
-
-          // add a thinking variant, if defined
+          // add FIRST a thinking variant, if defined
           if (hardcodedAnthropicVariants[model.id])
             acc.push({
               ...hardcodedModel,
               ...hardcodedAnthropicVariants[model.id],
             });
+
+          // add the base model
+          acc.push(hardcodedModel);
 
         } else {
 
