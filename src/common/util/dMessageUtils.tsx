@@ -34,11 +34,11 @@ export const avatarIconSx = {
   width: 36,
 } as const;
 
-const largerAvatarIconsSx = {
-  borderRadius: 'sm',
-  width: 48,
-  height: 48,
-};
+// const largerAvatarIconsSx = {
+//   borderRadius: 'sm',
+//   width: 48,
+//   height: 48,
+// };
 
 const aixSkipBoxSx = {
   height: 36,
@@ -148,7 +148,8 @@ export function makeMessageAvatarIcon(
               : isTextToImage ? ANIM_BUSY_PAINTING
                 : isReact ? ANIM_BUSY_THINKING
                   : ANIM_BUSY_TYPING}
-            sx={larger ? largerAvatarIconsSx : avatarIconSx}
+            sx={avatarIconSx}
+            // sx={larger ? largerAvatarIconsSx : avatarIconSx}
           />;
 
         // Purpose image (if present)
@@ -311,7 +312,13 @@ function _prettyMetrics(metrics: DMessageGenerator['metrics'], uiComplexityMode:
         })</small>
       </>}
     </div>}
-    {costCode && <div>{metrics?.$c !== undefined ? 'Costs:' : ''}</div>}
+    {/* Add the 'reported' costs underneath, if defined */}
+    {metrics?.$cReported !== undefined && <div>{metrics?.$c !== undefined ? '' : 'Costs:'}</div>}
+    {metrics?.$cReported !== undefined && <div>
+      <small>reported: <b>{formatModelsCost(metrics.$cReported / 100)}</b></small>
+    </div>}
+    {/* Add the cost 'code' underneath, if any */}
+    {costCode && <div>{(metrics?.$c !== undefined || metrics?.$cReported !== undefined) ? '' : 'Costs:'}</div>}
     {costCode && <div><em>{costCode}</em></div>}
 
     {/* Time */}
@@ -422,6 +429,10 @@ export function prettyShortChatModelName(model: string | undefined): string {
       cutModel = cutModel.slice(0, cutModel.length - dateMatch[0].length); // remove '-05-15'
     }
     const geminiName = cutModel
+      // commercial aliases
+      .replace('gemini-3-pro-image', 'Nano Banana Pro')
+      .replace('gemini-2.5-flash-image', 'Nano Banana')
+      // root changes
       .replace('non-thinking', '') // NOTE: this is our variant, injected in gemini.models.ts
       .replaceAll('-', ' ')
       // products

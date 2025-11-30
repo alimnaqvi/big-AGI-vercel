@@ -9,6 +9,7 @@ import type { SystemPurposeExample } from '../../../data';
 import type { DiagramConfig } from '~/modules/aifn/digrams/DiagramsModal';
 
 import type { ConversationHandler } from '~/common/chat-overlay/ConversationHandler';
+import type { DLLMContextTokens } from '~/common/stores/llms/llms.types';
 import { DConversationId, excludeSystemMessages } from '~/common/stores/chat/chat.conversation';
 import { ShortcutKey, useGlobalShortcuts } from '~/common/components/shortcuts/useGlobalShortcuts';
 import { convertFilesToDAttachmentFragments } from '~/common/attachment-drafts/attachment.pipeline';
@@ -16,7 +17,6 @@ import { createDMessageFromFragments, createDMessageTextContent, DMessage, DMess
 import { createTextContentFragment, DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
 import { openFileForAttaching } from '~/common/components/ButtonAttachFiles';
 import { optimaOpenPreferences } from '~/common/layout/optima/useOptima';
-import { useBrowserTranslationWarning } from '~/common/components/useIsBrowserTranslating';
 import { useCapabilityElevenLabs } from '~/common/components/useCapabilities';
 import { useChatOverlayStore } from '~/common/chat-overlay/store-perchat_vanilla';
 import { useChatStore } from '~/common/stores/chat/store-chats';
@@ -40,7 +40,7 @@ export function ChatMessageList(props: {
   conversationHandler: ConversationHandler | null,
   capabilityHasT2I: boolean,
   chatLLMAntPromptCaching: boolean,
-  chatLLMContextTokens: number | null,
+  chatLLMContextTokens: DLLMContextTokens,
   chatLLMSupportsImages: boolean,
   fitScreen: boolean,
   isMobile: boolean,
@@ -64,7 +64,6 @@ export function ChatMessageList(props: {
   const { notifyBooting } = useScrollToBottom();
   const danger_experimentalHtmlWebUi = useChatAutoSuggestHTMLUI();
   const [showSystemMessages] = useChatShowSystemMessages();
-  const optionalTranslationWarning = useBrowserTranslationWarning();
   const { conversationMessages, historyTokenCount } = useChatStore(useShallow(({ conversations }) => {
     const conversation = conversations.find(conversation => conversation.id === props.conversationId);
     return {
@@ -324,8 +323,6 @@ export function ChatMessageList(props: {
 
   return (
     <List role='chat-messages-list' sx={listSx}>
-
-      {optionalTranslationWarning}
 
       {props.isMessageSelectionMode && (
         <MessagesSelectionHeader

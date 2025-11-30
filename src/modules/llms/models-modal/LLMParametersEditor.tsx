@@ -6,12 +6,16 @@ import ClearIcon from '@mui/icons-material/Clear';
 import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 
+import type { DLLMMaxOutputTokens } from '~/common/stores/llms/llms.types';
 import { DModelParameterId, DModelParameterRegistry, DModelParameterSpec, DModelParameterValues, FALLBACK_LLM_PARAM_RESPONSE_TOKENS, FALLBACK_LLM_PARAM_TEMPERATURE, getAllModelParameterValues } from '~/common/stores/llms/llms.parameters';
 import { FormSelectControl } from '~/common/components/forms/FormSelectControl';
 import { FormSliderControl } from '~/common/components/forms/FormSliderControl';
 import { FormSwitchControl } from '~/common/components/forms/FormSwitchControl';
 import { InlineError } from '~/common/components/InlineError';
+import { useUIComplexityMode } from '~/common/stores/store-ui';
 import { webGeolocationRequest } from '~/common/util/webGeolocationUtils';
+
+import { AnthropicSkillsConfig } from './AnthropicSkillsConfig';
 
 
 const _UNSPECIFIED = '_UNSPECIFIED' as const;
@@ -64,6 +68,18 @@ const _geminiAspectRatioOptions = [
   { value: '21:9', label: '21:9', description: 'Ultra wide' },
 ] as const;
 
+const _geminiImageSizeOptions = [
+  { value: _UNSPECIFIED, label: 'Default', description: '1K (default)' },
+  { value: '1K', label: '1K', description: 'Default' },
+  { value: '2K', label: '2K', description: '2K' },
+  { value: '4K', label: '4K', description: '4K' },
+] as const;
+
+const _geminiCodeExecutionOptions = [
+  { value: 'auto', label: 'On', description: 'Enable code generation and execution' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
 const _geminiGoogleSearchOptions = [
   { value: 'unfiltered', label: 'On', description: 'Web Search' },
   { value: '1d', label: 'Last Day', description: 'Last 24 hours' },
@@ -72,6 +88,20 @@ const _geminiGoogleSearchOptions = [
   { value: '1y', label: 'Last Year', description: 'Results since last year' },
   // { value: '6m', label: 'Last 6 Months', description: 'Results from last 6 months' },
   { value: _UNSPECIFIED, label: 'Off', description: 'Default (disabled)' },
+] as const;
+
+const _geminiMediaResolutionOptions = [
+  { value: 'mr_high', label: 'High', description: 'Best quality, higher token usage' },
+  { value: 'mr_medium', label: 'Medium', description: 'Balanced quality and cost' },
+  { value: 'mr_low', label: 'Low', description: 'Faster, lower cost' },
+  { value: _UNSPECIFIED, label: 'Auto', description: 'Model optimizes based on media type (default)' },
+] as const;
+
+const _geminiThinkingLevelOptions = [
+  { value: 'high', label: 'High', description: 'Maximum reasoning depth' },
+  { value: 'medium', label: 'Medium', description: 'Balanced reasoning' },
+  { value: 'low', label: 'Low', description: 'Quick responses (default when unset)' },
+  { value: _UNSPECIFIED, label: 'Default', description: 'Model decides automatically (default)' },
 ] as const;
 
 const _xaiSearchModeOptions = [
@@ -87,6 +117,22 @@ const _antWebSearchOptions = [
 
 const _antWebFetchOptions = [
   { value: 'auto', label: 'On', description: 'Enable fetching web content and PDFs' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
+const _antEffortOptions = [
+  { value: _UNSPECIFIED, label: 'High', description: 'Maximum capability (default)' },
+  { value: 'medium', label: 'Medium', description: 'Balanced speed and quality' },
+  { value: 'low', label: 'Low', description: 'Fastest, most efficient' },
+] as const;
+
+// const _moonshotWebSearchOptions = [
+//   { value: 'auto', label: 'On', description: 'Enable Kimi $web_search ($0.005 per search)' },
+//   { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+// ] as const;
+
+const _ortWebSearchOptions = [
+  { value: 'auto', label: 'On', description: 'Enable web search (native for OpenAI/Anthropic, Exa for others)' },
   { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
 ] as const;
 
@@ -107,9 +153,10 @@ const _xaiDateFilterOptions = [
   { value: '1y', label: 'Last Year', description: 'Results from last 12 months' },
 ] as const;
 
+
 export function LLMParametersEditor(props: {
   // constants
-  maxOutputTokens: number | null,
+  maxOutputTokens: DLLMMaxOutputTokens,
   parameterSpecs: DModelParameterSpec<DModelParameterId>[],
   parameterOmitTemperature?: boolean,
   baselineParameters: DModelParameterValues,
@@ -122,6 +169,10 @@ export function LLMParametersEditor(props: {
   // rendering options
   simplified?: boolean,
 }) {
+
+  // external state
+  const isExtra = useUIComplexityMode() === 'extra';
+
 
   // registry (const) values
   const defAntTB = DModelParameterRegistry['llmVndAntThinkingBudget'];
@@ -141,13 +192,21 @@ export function LLMParametersEditor(props: {
     llmResponseTokens = FALLBACK_LLM_PARAM_RESPONSE_TOKENS, // fallback for undefined, result is number | null
     llmTemperature = FALLBACK_LLM_PARAM_TEMPERATURE, // fallback for undefined, result is number | null
     llmForceNoStream,
+    llmVndAnt1MContext,
+    llmVndAntEffort,
+    llmVndAntSkills,
     llmVndAntThinkingBudget,
-    llmVndAntWebSearch,
     llmVndAntWebFetch,
+    llmVndAntWebSearch,
     llmVndGeminiAspectRatio,
+    llmVndGeminiCodeExecution,
     llmVndGeminiGoogleSearch,
+    llmVndGeminiImageSize,
+    llmVndGeminiMediaResolution,
     llmVndGeminiShowThoughts,
     llmVndGeminiThinkingBudget,
+    llmVndGeminiThinkingLevel,
+    // llmVndMoonshotWebSearch,
     llmVndOaiReasoningEffort,
     llmVndOaiReasoningEffort4,
     llmVndOaiRestoreMarkdown,
@@ -155,6 +214,7 @@ export function LLMParametersEditor(props: {
     llmVndOaiWebSearchGeolocation,
     llmVndOaiImageGeneration,
     llmVndOaiVerbosity,
+    llmVndOrtWebSearch,
     llmVndPerplexityDateFilter,
     llmVndPerplexitySearchMode,
     llmVndXaiSearchMode,
@@ -264,6 +324,19 @@ export function LLMParametersEditor(props: {
       />
     )}
 
+    {showParam('llmVndAntEffort') && (
+      <FormSelectControl
+        title='Effort'
+        tooltip='Controls token usage vs. thoroughness. Low = fastest, most efficient. High = maximum capability (default). Works alongside thinking budget.'
+        value={llmVndAntEffort ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value || value === 'high') onRemoveParameter('llmVndAntEffort');
+          else onChangeParameter({ llmVndAntEffort: value });
+        }}
+        options={_antEffortOptions}
+      />
+    )}
+
     {showParam('llmVndAntWebSearch') && (
       <FormSelectControl
         title='Web Search'
@@ -290,6 +363,37 @@ export function LLMParametersEditor(props: {
       />
     )}
 
+    {showParam('llmVndAnt1MContext') && (
+      <FormSwitchControl
+        title='1M Context Window (Beta)'
+        description='Enable 1M token context'
+        tooltip='Enables the 1M token context window with premium pricing for &gt;200K input tokens. - https://docs.claude.com/en/docs/build-with-claude/context-windows#1m-token-context-window'
+        checked={!!llmVndAnt1MContext}
+        onChange={checked => {
+          if (!checked) onRemoveParameter('llmVndAnt1MContext');
+          else onChangeParameter({ llmVndAnt1MContext: true });
+        }}
+      />
+    )}
+
+    {isExtra && showParam('llmVndAntSkills') && (
+      <AnthropicSkillsConfig llmVndAntSkills={llmVndAntSkills} onChangeParameter={onChangeParameter} onRemoveParameter={onRemoveParameter} />
+    )}
+
+
+    {showParam('llmVndGeminiImageSize') && (
+      <FormSelectControl
+        title='Image Size'
+        tooltip='Controls the resolution of generated images'
+        value={llmVndGeminiImageSize ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiImageSize');
+          else onChangeParameter({ llmVndGeminiImageSize: value });
+        }}
+        options={_geminiImageSizeOptions}
+      />
+    )}
+
     {showParam('llmVndGeminiAspectRatio') && (
       <FormSelectControl
         title='Aspect Ratio'
@@ -303,10 +407,25 @@ export function LLMParametersEditor(props: {
       />
     )}
 
+
+    {showParam('llmVndGeminiGoogleSearch') && (
+      <FormSelectControl
+        title='Google Search'
+        // tooltip='Enable Google Search grounding to ground responses in real-time web content. Optionally filter results by publication date.'
+        value={llmVndGeminiGoogleSearch ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiGoogleSearch');
+          else onChangeParameter({ llmVndGeminiGoogleSearch: value });
+        }}
+        options={_geminiGoogleSearchOptions}
+      />
+    )}
+
+
     {showParam('llmVndGeminiShowThoughts') && (
       <FormSwitchControl
-        title='Show Chain of Thought'
-        description={`Displays Gemini\'s reasoning process`}
+        title='Show Reasoning'
+        description='Show chain of thoughts'
         checked={!!llmVndGeminiShowThoughts}
         onChange={checked => onChangeParameter({ llmVndGeminiShowThoughts: checked })}
       />
@@ -349,18 +468,58 @@ export function LLMParametersEditor(props: {
       />
     )}
 
-    {showParam('llmVndGeminiGoogleSearch') && (
+    {showParam('llmVndGeminiThinkingLevel') && (
       <FormSelectControl
-        title='Google Search'
-        // tooltip='Enable Google Search grounding to ground responses in real-time web content. Optionally filter results by publication date.'
-        value={llmVndGeminiGoogleSearch ?? _UNSPECIFIED}
+        title='Thinking Level'
+        tooltip='Controls internal reasoning depth. Replaces thinking_budget for Gemini 3 models. When unset, the model decides dynamically.'
+        value={llmVndGeminiThinkingLevel ?? _UNSPECIFIED}
         onChange={(value) => {
-          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiGoogleSearch');
-          else onChangeParameter({ llmVndGeminiGoogleSearch: value });
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiThinkingLevel');
+          else onChangeParameter({ llmVndGeminiThinkingLevel: value });
         }}
-        options={_geminiGoogleSearchOptions}
+        options={_geminiThinkingLevelOptions}
       />
     )}
+
+    {showParam('llmVndGeminiCodeExecution') && (
+      <FormSelectControl
+        title='Code Execution'
+        tooltip='Enable automatic Python code generation and execution by the model'
+        value={llmVndGeminiCodeExecution ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiCodeExecution');
+          else onChangeParameter({ llmVndGeminiCodeExecution: value });
+        }}
+        options={_geminiCodeExecutionOptions}
+      />
+    )}
+
+    {showParam('llmVndGeminiMediaResolution') && (
+      <FormSelectControl
+        title='Media Resolution'
+        tooltip='Controls vision processing quality for multimodal inputs. Higher resolution improves text reading and detail identification but increases token usage.'
+        value={llmVndGeminiMediaResolution ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiMediaResolution');
+          else onChangeParameter({ llmVndGeminiMediaResolution: value });
+        }}
+        options={_geminiMediaResolutionOptions}
+      />
+    )}
+
+
+    {/*{showParam('llmVndMoonshotWebSearch') && (*/}
+    {/*  <FormSelectControl*/}
+    {/*    title='Web Search'*/}
+    {/*    tooltip='Enable Kimi $web_search builtin function for real-time web search. Costs $0.005 per search. Use kimi-k2-turbo-preview for dynamic context handling.'*/}
+    {/*    value={llmVndMoonshotWebSearch ?? _UNSPECIFIED}*/}
+    {/*    onChange={(value) => {*/}
+    {/*      if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndMoonshotWebSearch');*/}
+    {/*      else onChangeParameter({ llmVndMoonshotWebSearch: value });*/}
+    {/*    }}*/}
+    {/*    options={_moonshotWebSearchOptions}*/}
+    {/*  />*/}
+    {/*)}*/}
 
     {showParam('llmVndPerplexitySearchMode') && (
       <FormSelectControl
@@ -517,6 +676,21 @@ export function LLMParametersEditor(props: {
         }}
       />
     )}
+
+
+    {showParam('llmVndOrtWebSearch') && (
+      <FormSelectControl
+        title='Web Search'
+        tooltip='Enable OpenRouter web search plugin. Uses native search for OpenAI/Anthropic models, Exa for others. Adds web citations to responses.'
+        value={llmVndOrtWebSearch ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndOrtWebSearch');
+          else onChangeParameter({ llmVndOrtWebSearch: value });
+        }}
+        options={_ortWebSearchOptions}
+      />
+    )}
+
 
     {showParam('llmVndXaiSearchMode') && (
       <FormSelectControl

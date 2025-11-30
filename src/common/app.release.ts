@@ -23,13 +23,13 @@ export const Release = {
 
   // this is here to trigger revalidation of data, e.g. models refresh
   Monotonics: {
-    Aix: 35,
-    NewsVersion: 192,
+    Aix: 42,
+    NewsVersion: 201,
   },
 
   // Frontend: pretty features
   TechLevels: {
-    AIX: '1.1', Apply: '0.8', Beam: '2.0', LFS: '0.5', /*Precog: '0.1',*/ React: '1.5',
+    AIX: '2', Apply: '0.8', Beam: '2', LFS: '0.9', /*Precog: '0.1',*/ React: '1.6',
   },
   AiFunctions: [
     // from `ContextChatGenerate_schema`
@@ -59,6 +59,14 @@ export const Release = {
 
 
 export const BaseProduct = {
+  ProductName: 'Big-AGI',
+  ProductURL: 'https://big-agi.com',
+  PrivacyPolicy: 'https://big-agi.com/privacy',
+  TermsOfService: 'https://big-agi.com/terms',
+  // ecosystem
+  DocsBaseSite: 'https://big-agi.com/docs',
+  OpenSupportDiscord: 'https://discord.gg/MkH4qj2Jp9',
+  OpenSourceRepo: 'https://github.com/enricoros/big-agi',
   ReleaseNotes: '',
-  SupportForm: (_userId?: string) => 'https://github.com/enricoros/big-agi/issues',
+  SupportForm: (_userId?: string) => 'https://github.com/enricoros/big-AGI/issues/new?template=ai-triage.yml',
 } as const;

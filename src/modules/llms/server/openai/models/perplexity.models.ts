@@ -12,7 +12,7 @@ const _knownPerplexityChatModels: ModelDescriptionSchema[] = [
   // Research Models
   {
     id: 'sonar-deep-research',
-    label: 'Sonar Deep Research 🌐',
+    label: 'Sonar Deep Research',
     description: 'Expert-level research model for exhaustive searches and comprehensive reports. 128k context.',
     contextWindow: 128000,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Reasoning, LLM_IF_Tools_WebSearch],
@@ -25,15 +25,14 @@ const _knownPerplexityChatModels: ModelDescriptionSchema[] = [
     chatPrice: {
       input: 2,
       output: 8,
-      // Full pricing: $2/1M input, $8/1M output, $5/1k searches, $3/1M reasoning tokens
-      // Note: Citation tokens no longer charged (removed April 2025)
+      // Full pricing: $2/1M input, $8/1M output, $2/1M citations, $5/1k searches, $3/1M reasoning tokens
     },
   },
 
   // Reasoning Models
   {
     id: 'sonar-reasoning-pro',
-    label: 'Sonar Reasoning Pro 🌐',
+    label: 'Sonar Reasoning Pro',
     description: 'Premier reasoning model (DeepSeek R1) with Chain of Thought. 128k context.',
     contextWindow: 128000,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Reasoning, LLM_IF_Tools_WebSearch],
@@ -50,7 +49,7 @@ const _knownPerplexityChatModels: ModelDescriptionSchema[] = [
   },
   {
     id: 'sonar-reasoning',
-    label: 'Sonar Reasoning 🌐',
+    label: 'Sonar Reasoning',
     description: 'Fast, real-time reasoning model for quick problem-solving with search. 128k context.',
     contextWindow: 128000,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Reasoning, LLM_IF_Tools_WebSearch],
@@ -69,7 +68,7 @@ const _knownPerplexityChatModels: ModelDescriptionSchema[] = [
   // Search Models
   {
     id: 'sonar-pro',
-    label: 'Sonar Pro 🌐',
+    label: 'Sonar Pro',
     description: 'Advanced search model for complex queries and deep content understanding. 200k context.',
     contextWindow: 200000,
     maxCompletionTokens: 8000,
@@ -87,7 +86,7 @@ const _knownPerplexityChatModels: ModelDescriptionSchema[] = [
   },
   {
     id: 'sonar',
-    label: 'Sonar 🌐',
+    label: 'Sonar',
     description: 'Lightweight, cost-effective search model for quick, grounded answers. 128k context.',
     contextWindow: 128000,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_Tools_WebSearch],
@@ -125,7 +124,7 @@ export function perplexityInjectVariants(models: ModelDescriptionSchema[], model
     models.push({
       ...model,
       idVariant: 'academic',
-      label: 'Sonar Deep Research (Academic) 🌐',
+      label: 'Sonar Deep Research (Academic)',
       description: 'Expert-level research model with academic sources only. Searches scholarly databases, peer-reviewed papers, and academic publications. 128k context.',
       parameterSpecs: [
         // Fixed parameters for academic search
@@ -145,7 +144,7 @@ export function perplexityInjectVariants(models: ModelDescriptionSchema[], model
   return models;
 }
 
-export function perplexityAIModelDescriptions() {
+export function perplexityHardcodedModelDescriptions() {
   // Returns the list of known Perplexity models
   return _knownPerplexityChatModels;
 }
