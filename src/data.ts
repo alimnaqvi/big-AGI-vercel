@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-export type SystemPurposeId = 'Catalyst' | 'Custom' | 'Designer' | 'Developer' | 'DeveloperPreview' | 'Executive' | 'Generic' | 'Scientist' | 'YouTubeTranscriber';
+export type SystemPurposeId = 'Catalyst' | 'Concise' | 'Custom' | 'Designer' | 'Developer' | 'DeveloperPreview' | 'Executive' | 'Generic' | 'Scientist' | 'YouTubeTranscriber';
 
 export const defaultSystemPurposeId: SystemPurposeId = 'Generic';
 
@@ -29,6 +29,18 @@ Current date: {{LocaleNow}}
 `,
     symbol: '🧠',
     examples: ['help me plan a trip to Japan', 'what is the meaning of life?', 'how do I get a job at OpenAI?', 'what are some healthy meal ideas?'],
+    call: { starters: ['Hey, how can I assist?', 'AI assistant ready. What do you need?', 'Ready to assist.', 'Hello.'] },
+    voices: { elevenLabs: { voiceId: 'z9fAnlkpzviPz146aGWa' } },
+  },
+  Concise: {
+    title: 'Concise',
+    description: 'Concise responses',
+    systemMessage: `You are an AI assistant. Be concise in your responses.
+Knowledge cutoff: {{LLM.Cutoff}}
+Current date: {{LocaleNow}}
+`,
+    symbol: '🫡',
+    examples: ['what is the capital of Australia', 'what is the meaning of life?'],
     call: { starters: ['Hey, how can I assist?', 'AI assistant ready. What do you need?', 'Ready to assist.', 'Hello.'] },
     voices: { elevenLabs: { voiceId: 'z9fAnlkpzviPz146aGWa' } },
   },
