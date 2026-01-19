@@ -79,6 +79,24 @@ export const _knownOpenAIChatModels: ManualMappings = [
     symLink: 'gpt-5.2-2025-12-11',
   },
 
+  // GPT-5.2 Codex
+  {
+    idPrefix: 'gpt-5.2-codex',
+    label: 'GPT-5.2 Codex',
+    description: 'GPT-5.2 optimized for long-horizon, agentic coding tasks in Codex or similar environments. Supports low, medium, high, and xhigh reasoning effort settings.',
+    contextWindow: 400000,
+    maxCompletionTokens: 128000,
+    trainingDataCutoff: 'Aug 2025',
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
+    parameterSpecs: [
+      { paramId: 'llmForceNoStream' },
+      { paramId: 'llmVndOaiReasoningEffort52' },
+      { paramId: 'llmVndOaiWebSearchContext' },
+    ],
+    chatPrice: { input: 1.75, cache: { cType: 'oai-ac', read: 0.175 }, output: 14 },
+    // benchmark: TBD
+  },
+
   // GPT-5.2 Chat Latest
   {
     idPrefix: 'gpt-5.2-chat-latest',
@@ -618,9 +636,19 @@ export const _knownOpenAIChatModels: ManualMappings = [
     symLink: 'gpt-audio-2025-08-28',
   },
   {
+    idPrefix: 'gpt-audio-mini-2025-12-15',
+    label: 'GPT Audio Mini (2025-12-15)',
+    description: 'Cost-efficient audio model. Accepts audio inputs and outputs via Chat Completions REST API.',
+    contextWindow: 128000,
+    maxCompletionTokens: 16384,
+    interfaces: IFS_GPT_AUDIO,
+    chatPrice: { input: 0.6, output: 2.4 },
+  },
+  {
     idPrefix: 'gpt-audio-mini-2025-10-06',
     label: 'GPT Audio Mini (2025-10-06)',
-    description: '',
+    hidden: true, // previous version
+    description: 'Cost-efficient audio model. Accepts audio inputs and outputs via Chat Completions REST API.',
     contextWindow: 128000,
     maxCompletionTokens: 16384,
     interfaces: IFS_GPT_AUDIO,
@@ -629,7 +657,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
   {
     idPrefix: 'gpt-audio-mini',
     label: 'GPT Audio Mini',
-    symLink: 'gpt-audio-mini-2025-10-06',
+    symLink: 'gpt-audio-mini-2025-12-15',
   },
 
 
@@ -967,7 +995,7 @@ const openAIModelsDenyList: string[] = [
   'whisper-1', 'gpt-4o-transcribe', 'gpt-4o-mini-transcribe', // FIXME: support these
 
   // Image models: /v1/images/generations
-  'gpt-image-1', 'gpt-image-1-mini', 'dall-e-3', 'dall-e-2',
+  'gpt-image-1.5', 'chatgpt-image-latest', 'gpt-image-1', 'gpt-image-1-mini', 'dall-e-3', 'dall-e-2',
 
   // Video models: /v1/videos
   'sora-2-pro', 'sora-2',
@@ -990,6 +1018,7 @@ const _manualOrderingIdPrefixes = [
   'gpt-5.2-20',
   'gpt-5.2-pro-20',
   'gpt-5.2-pro',
+  'gpt-5.2-codex',
   'gpt-5.2-chat-latest',
   'gpt-5.2',
   // GPT-5.1

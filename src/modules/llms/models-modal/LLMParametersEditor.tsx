@@ -37,12 +37,13 @@ const _reasoningEffort52Options = [
   { value: 'high', label: 'High', description: 'Deep, thorough analysis' } as const,
   { value: 'medium', label: 'Medium', description: 'Balanced reasoning depth' } as const,
   { value: 'low', label: 'Low', description: 'Quick, concise responses' } as const,
-  { value: _UNSPECIFIED, label: 'None', description: '-' } as const,
+  { value: _UNSPECIFIED, label: 'Default', description: '-' } as const,
 ] as const;
 const _reasoningEffort52ProOptions = [
   { value: 'xhigh', label: 'Max', description: 'Hardest thinking, best quality' } as const,
   { value: 'high', label: 'High', description: 'Deep, thorough analysis' } as const,
-  { value: _UNSPECIFIED, label: 'Medium', description: '-' } as const,
+  { value: 'medium', label: 'Medium', description: 'Balanced reasoning depth' } as const,
+  { value: _UNSPECIFIED, label: 'Default', description: '-' } as const,
 ] as const;
 const _verbosityOptions = [
   { value: 'high', label: 'Detailed', description: 'Thorough responses, great for audits' } as const,
@@ -106,14 +107,23 @@ const _geminiMediaResolutionOptions = [
   { value: 'mr_high', label: 'High', description: 'Best quality, higher token usage' },
   { value: 'mr_medium', label: 'Medium', description: 'Balanced quality and cost' },
   { value: 'mr_low', label: 'Low', description: 'Faster, lower cost' },
-  { value: _UNSPECIFIED, label: 'Auto', description: 'Model optimizes based on media type (default)' },
+  { value: _UNSPECIFIED, label: 'Auto', description: 'Model decides based on media' },
 ] as const;
 
+// Gemini 3 Pro: 2-level thinking (high, low)
 const _geminiThinkingLevelOptions = [
   { value: 'high', label: 'High', description: 'Maximum reasoning depth' },
+  { value: 'low', label: 'Low', description: 'Quick responses' },
+  { value: _UNSPECIFIED, label: 'Default', description: 'Model decides' },
+] as const;
+
+// Gemini 3 Flash: 4-level thinking (high, medium, low, minimal)
+const _geminiThinkingLevel4Options = [
+  { value: 'high', label: 'High', description: 'Maximum reasoning depth' },
   { value: 'medium', label: 'Medium', description: 'Balanced reasoning' },
-  { value: 'low', label: 'Low', description: 'Quick responses (default when unset)' },
-  { value: _UNSPECIFIED, label: 'Default', description: 'Model decides automatically (default)' },
+  { value: 'low', label: 'Low', description: 'Quick responses' },
+  { value: 'minimal', label: 'Minimal', description: 'Fastest, least reasoning' },
+  { value: _UNSPECIFIED, label: 'Default', description: 'Model decides' },
 ] as const;
 
 const _xaiSearchModeOptions = [
@@ -218,6 +228,7 @@ export function LLMParametersEditor(props: {
     llmVndGeminiShowThoughts,
     llmVndGeminiThinkingBudget,
     llmVndGeminiThinkingLevel,
+    llmVndGeminiThinkingLevel4,
     // llmVndMoonshotWebSearch,
     llmVndOaiReasoningEffort,
     llmVndOaiReasoningEffort4,
@@ -485,13 +496,26 @@ export function LLMParametersEditor(props: {
     {showParam('llmVndGeminiThinkingLevel') && (
       <FormSelectControl
         title='Thinking Level'
-        tooltip='Controls internal reasoning depth. Replaces thinking_budget for Gemini 3 models. When unset, the model decides dynamically.'
+        tooltip='Controls internal reasoning depth for Gemini 3 Pro. When unset, the model decides dynamically.'
         value={llmVndGeminiThinkingLevel ?? _UNSPECIFIED}
         onChange={(value) => {
           if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiThinkingLevel');
           else onChangeParameter({ llmVndGeminiThinkingLevel: value });
         }}
         options={_geminiThinkingLevelOptions}
+      />
+    )}
+
+    {showParam('llmVndGeminiThinkingLevel4') && (
+      <FormSelectControl
+        title='Thinking Level'
+        tooltip='Controls internal reasoning depth for Gemini 3 Flash. When unset, the model decides dynamically.'
+        value={llmVndGeminiThinkingLevel4 ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiThinkingLevel4');
+          else onChangeParameter({ llmVndGeminiThinkingLevel4: value });
+        }}
+        options={_geminiThinkingLevel4Options}
       />
     )}
 
@@ -635,12 +659,10 @@ export function LLMParametersEditor(props: {
       <FormSelectControl
         title='Reasoning Effort'
         tooltip='Controls how much effort the model spends on reasoning (5-level scale for GPT-5.2)'
-        value={(!llmVndOaiReasoningEffort52 || llmVndOaiReasoningEffort52 === 'none') ? _UNSPECIFIED : llmVndOaiReasoningEffort52}
+        value={(!llmVndOaiReasoningEffort52 /*|| llmVndOaiReasoningEffort52 === 'none'*/) ? _UNSPECIFIED : llmVndOaiReasoningEffort52}
         onChange={(value) => {
-          if (value === _UNSPECIFIED || !value)
-            onRemoveParameter('llmVndOaiReasoningEffort52');
-          else
-            onChangeParameter({ llmVndOaiReasoningEffort52: value });
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndOaiReasoningEffort52');
+          else onChangeParameter({ llmVndOaiReasoningEffort52: value });
         }}
         options={_reasoningEffort52Options}
       />
@@ -650,7 +672,7 @@ export function LLMParametersEditor(props: {
       <FormSelectControl
         title='Reasoning Effort'
         tooltip='Controls how much effort the model spends on reasoning (3-level scale for GPT-5.2 Pro)'
-        value={(!llmVndOaiReasoningEffort52Pro || llmVndOaiReasoningEffort52Pro === 'medium') ? _UNSPECIFIED : llmVndOaiReasoningEffort52Pro}
+        value={(!llmVndOaiReasoningEffort52Pro /*|| llmVndOaiReasoningEffort52Pro === 'medium'*/) ? _UNSPECIFIED : llmVndOaiReasoningEffort52Pro}
         onChange={(value) => {
           if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndOaiReasoningEffort52Pro');
           else onChangeParameter({ llmVndOaiReasoningEffort52Pro: value });

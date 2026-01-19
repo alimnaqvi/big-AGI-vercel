@@ -296,7 +296,10 @@ export namespace OpenAIWire_API_Chat_Completions {
     top_p: z.number().min(0).max(1).optional(),
 
     // new output modalities
-    modalities: z.array(z.enum(['text', 'audio'])).optional(), // defaults to ['text']
+    modalities: z.array(z.enum([
+      'text', 'audio',
+      'image' // [OpenRouter, 2025-12-31] Extension for requesting Image output
+    ])).optional(), // defaults to ['text']
     audio: z.object({  // Parameters for audio output. Required when audio output is requested with `modalities: ["audio"]`
       voice: z.enum([
         'ash', 'ballad', 'coral', 'sage', 'verse', // recommended
@@ -304,6 +307,12 @@ export namespace OpenAIWire_API_Chat_Completions {
         'marin', // new
       ]),
       format: z.enum(['wav', 'mp3', 'flac', 'opus', 'pcm16']),
+    }).optional(),
+
+    // [OpenRouter, 2025-12-31] Extension for Image Generation Configuration (works with Gemini models at the beginning)
+    image_config: z.object({
+      aspect_ratio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9']).optional(),
+      image_size: z.enum(['1K', '2K', '4K']).optional(),
     }).optional(),
 
     // API configuration
@@ -524,6 +533,15 @@ export namespace OpenAIWire_API_Chat_Completions {
       expires_at: z.number(), // Unix timestamp
     }).nullable().optional(),
 
+    /**
+     * [OpenRouter, 2025-12-31] Extension for Image generation output (non-streaming)
+     */
+    images: z.array(z.object({
+      image_url: z.object({
+        url: z.string(), // base64 data URL like "data:image/png;base64,..."
+      }),
+    })).optional(),
+
   });
 
   const Choice_NS_schema = z.object({
@@ -659,6 +677,14 @@ export namespace OpenAIWire_API_Chat_Completions {
       transcript: z.string().optional(), // incremental transcript
       expires_at: z.number().optional(), // seems to be only in the last chunk
     }).optional(),
+    /**
+     * [OpenRouter, 2025-12-31] Extension for Image generation output
+     */
+    images: z.array(z.object({
+      image_url: z.object({
+        url: z.string(), // base64 data URL like "data:image/png;base64,..."
+      }),
+    })).optional(),
   });
 
   const ChunkChoice_schema = z.object({
@@ -748,10 +774,11 @@ export namespace OpenAIWire_API_Images_Generations {
   export type Request = z.infer<typeof Request_schema>;
   const Request_schema = z.object({
 
-    // 32,000 for gpt-image-1/gpt-image-1-mini, 4,000 for dall-e-3, 1,000 for dall-e-2
+    // 32,000 for gpt-image-1.5/gpt-image-1/gpt-image-1-mini, 4,000 for dall-e-3, 1,000 for dall-e-2
     prompt: z.string().max(32000),
 
     model: z.enum([
+      'gpt-image-1.5',
       'gpt-image-1',
       'gpt-image-1-mini',
       'dall-e-3',
@@ -764,7 +791,7 @@ export namespace OpenAIWire_API_Images_Generations {
     // Image quality
     quality: z.enum([
       'auto',                   // default
-      'high', 'medium', 'low',  // gpt-image-1, gpt-image-1-mini
+      'high', 'medium', 'low',  // gpt-image-1.5, gpt-image-1, gpt-image-1-mini
       'hd', 'standard',         // dall-e-3: hd | standard, dall-e-2: only standard
     ]).optional(),
 
@@ -790,7 +817,7 @@ export namespace OpenAIWire_API_Images_Generations {
     user: z.string().optional(),
 
 
-    // -- GPT Image Family Specific Parameters (gpt-image-1, gpt-image-1-mini) --
+    // -- GPT Image Family Specific Parameters (gpt-image-1.5, gpt-image-1, gpt-image-1-mini) --
 
     // Allows to set transparency (in that case, format = png or webp)
     background: z.enum(['transparent', 'opaque', 'auto' /* default */]).optional(),
@@ -821,7 +848,7 @@ export namespace OpenAIWire_API_Images_Generations {
       url: z.url().optional(), // if the response_format is 'url' - DEPRECATED
     })),
 
-    // GPT Image models only (gpt-image-1, gpt-image-1-mini)
+    // GPT Image models only (gpt-image-1.5, gpt-image-1, gpt-image-1-mini)
     usage: z.object({
       total_tokens: z.number(),
       input_tokens: z.number() // images + text tokens in the input prompt
@@ -849,14 +876,14 @@ export namespace OpenAIWire_API_Images_Edits {
    */
   export const Request_schema = z.object({
 
-    // 32,000 for gpt-image-1/gpt-image-1-mini, 1,000 for dall-e-2
+    // 32,000 for gpt-image-1.5/gpt-image-1/gpt-image-1-mini, 1,000 for dall-e-2
     prompt: z.string().max(32000),
 
     // image: file | file[] - REQUIRED - Handled as file uploads in FormData ('image' field)
 
     // mask: file - OPTIONAL - Handled as file upload in FormData ('mask' field)
 
-    model: z.enum(['gpt-image-1', 'gpt-image-1-mini', 'dall-e-2']).optional(),
+    model: z.enum(['gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini', 'dall-e-2']).optional(),
 
     // Number of images to generate, between 1 and 10
     n: z.number().min(1).max(10).nullable().optional(),
@@ -864,7 +891,7 @@ export namespace OpenAIWire_API_Images_Edits {
     // Image quality
     quality: z.enum([
       'auto',                   // default
-      'high', 'medium', 'low',  // gpt-image-1, gpt-image-1-mini
+      'high', 'medium', 'low',  // gpt-image-1.5, gpt-image-1, gpt-image-1-mini
       'standard',               // dall-e-2: only standard
     ]).optional(),
 
@@ -1803,6 +1830,11 @@ export namespace OpenAIWire_API_Responses {
   //   response: Response_schema,
   // });
 
+  // Keepalive event - [OpenAI, 2025-01-13] sent periodically to keep the connection alive
+  const KeepaliveEvent_schema = _BaseEvent_schema.extend({
+    type: z.literal('keepalive'),
+  });
+
   // Error event
   const ErrorEvent_schema = _BaseEvent_schema.extend({
     type: z.literal('error'),
@@ -1896,6 +1928,9 @@ export namespace OpenAIWire_API_Responses {
 
     // Error events
     ErrorEvent_schema,
+
+    // Keepalive events
+    KeepaliveEvent_schema,
   ]);
 
 }

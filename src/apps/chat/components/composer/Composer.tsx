@@ -545,6 +545,9 @@ export function Composer(props: {
 
     // Enter: primary action
     if (e.key === 'Enter') {
+      // Skip if composing (e.g., CJK input methods) - issue #784
+      if (e.nativeEvent.isComposing)
+        return;
 
       // Alt (Windows) or Option (Mac) + Enter: append the message instead of sending it
       if (e.altKey && !e.metaKey && !e.ctrlKey) {
