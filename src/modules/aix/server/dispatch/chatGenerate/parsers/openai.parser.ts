@@ -73,6 +73,11 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
     // ```Can you extend the Zod chunk response object parsing (all optional) to include the missing data? The following is an exampel of the object I received:```
     const chunkData = JSON.parse(eventData); // this is here just for ease of breakpoint, otherwise it could be inlined
 
+    // [OpenAI, 2025-01-13] Keepalive events - skip silently
+    // These are sent periodically to keep the connection alive (e.g., {"type":"keepalive","sequence_number":59})
+    if (chunkData?.type === 'keepalive')
+      return;
+
     // [OpenRouter/others] transmits upstream errors pre-parsing (object wouldn't be valid)
     if (_forwardOpenRouterDataError(chunkData, pt))
       return;
@@ -196,7 +201,7 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
         deltaHasReasoning = true;
 
       }
-      // delta: Reasoning Details (Structured) [OpenRouter, 2025-11-11]
+      // delta: Reasoning Details (Structured) [OpenRouter, 2025-01-20]
       else if (Array.isArray(delta.reasoning_details)) {
 
         for (const reasoningDetail of delta.reasoning_details) {
@@ -466,7 +471,7 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
       } else if (message.content !== undefined && message.content !== null)
         throw new Error(`unexpected message content type: ${typeof message.content}`);
 
-      // [OpenRouter, 2025-11-11] Handle structured reasoning_details
+      // [OpenRouter, 2025-01-20] Handle structured reasoning_details
       if (Array.isArray(message.reasoning_details)) {
         for (const reasoningDetail of message.reasoning_details) {
           if (reasoningDetail.type === 'reasoning.text' && typeof reasoningDetail.text === 'string') {

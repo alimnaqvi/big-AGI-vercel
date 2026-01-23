@@ -4,14 +4,15 @@ import { LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Reasoning, LLM_IF_OAI_Vision
 import { Release } from '~/common/app.release';
 
 import type { ModelDescriptionSchema } from '../../llm.server.types';
+import { llmDevCheckModels_DEV } from '../../models.mappings';
 
 
 // configuration
-const MISTRAL_DEV_SHOW_GAPS = Release.IsNodeDevBuild;
+const DEV_DEBUG_MISTRAL_MODELS = Release.IsNodeDevBuild; // not in staging to reduce noise
 
 
 // [Mistral]
-// Updated 2026-01-14
+// Updated 2026-01-21
 // - models on: https://docs.mistral.ai/getting-started/models/models_overview/
 // - pricing on: https://mistral.ai/pricing#api-pricing
 // - benchmark elo on CBA
@@ -70,11 +71,12 @@ const _knownMistralModelDetails: Record<string, {
   'mistral-small-2506': { chatPrice: { input: 0.1, output: 0.3 } }, // Mistral Small 3.2
   'mistral-small-latest': { chatPrice: { input: 0.1, output: 0.3 }, hidden: true }, // symlink
 
+  'labs-mistral-small-creative': { label: 'Mistral Small Creative', chatPrice: { input: 0.1, output: 0.3 } }, // creative writing, roleplay (Labs)
+
   'magistral-small-2509': { chatPrice: { input: 0.5, output: 1.5 } }, // reasoning
   'magistral-small-latest': { chatPrice: { input: 0.5, output: 1.5 }, hidden: true }, // symlink
 
   'labs-devstral-small-2512': { label: 'Devstral Small 2 (2512)', chatPrice: { input: 0.1, output: 0.3 } }, // Devstral Small 2 - 24B coding agents (Labs)
-  'devstral-small-2512': { label: 'Devstral Small 2 (2512)', chatPrice: { input: 0.1, output: 0.3 }, hidden: true }, // alternate ID
   'devstral-small-2507': { chatPrice: { input: 0.1, output: 0.3 }, hidden: true }, // older version
   'devstral-small-latest': { label: 'Devstral Small 2 (latest)', chatPrice: { input: 0.1, output: 0.3 }, hidden: true }, // symlink
 
@@ -108,8 +110,8 @@ const mistralModelFamilyOrder = [
   'codestral',
   'magistral-small',
   'mistral-small',
+  'labs-mistral-small-creative', // Mistral Small Creative (Labs) - must come after mistral-small
   'labs-devstral-small-2512', // Devstral Small 2 (Labs) - must come before generic prefixes
-  'devstral-small-2512',  // Devstral Small 2 - must come before generic 'devstral-small'
   'devstral-small',
   'voxtral-small',
   'voxtral-mini',
@@ -255,19 +257,18 @@ export function mistralModels(wireModels: unknown): ModelDescriptionSchema[] {
     }
   }
 
-  // 6. [DEV] find items in _knownMistralModelDetails that are not in the models list
-  if (MISTRAL_DEV_SHOW_GAPS) {
+  // 6. [DEV] check model definitions and pricing
+  if (DEV_DEBUG_MISTRAL_MODELS) {
+
+    // check stale model definitions (unknown check disabled - too many intentionally untracked models)
+    const knownModelIds = Object.keys(_knownMistralModelDetails);
+    llmDevCheckModels_DEV('Mistral', models.map(m => m.id), knownModelIds, { checkUnknown: false });
 
     // show missing pricing
-    const knownModelIds = Object.keys(_knownMistralModelDetails);
     const missingPricing = knownModelIds.filter(id => !_knownMistralModelDetails[id].chatPrice);
     if (missingPricing.length > 0)
-      console.warn('[DEV] Mistral models missing pricing:', missingPricing);
+      console.log('[DEV] Mistral models missing pricing:', missingPricing);
 
-    // show extra pricing
-    const missingModels = knownModelIds.filter(id => !models.some(m => m.id === id));
-    if (missingModels.length > 0)
-      console.log('[DEV] Mistral models not in the list:', missingModels);
   }
 
   return models;

@@ -11,6 +11,7 @@ import { findLLMOrThrow } from '~/common/stores/llms/store-llms';
 import { getAixInspectorEnabled } from '~/common/stores/store-ui';
 import { getLabsDevNoStreaming } from '~/common/stores/store-ux-labs';
 import { metricsStoreAddChatGenerate } from '~/common/stores/metrics/store-metrics';
+import { stripUndefined } from '~/common/util/objectUtils';
 import { webGeolocationCached } from '~/common/util/webGeolocationUtils';
 
 // NOTE: pay particular attention to the "import type", as this is importing from the server-side Zod definitions
@@ -46,14 +47,15 @@ export function aixCreateModelFromLLMOptions(
 
   // destructure input with the overrides
   const {
-    llmRef, llmTemperature, llmResponseTokens, llmTopP,
+    llmRef, llmTemperature, llmResponseTokens, llmTopP, llmForceNoStream,
     llmVndAnt1MContext, llmVndAntSkills, llmVndAntThinkingBudget, llmVndAntWebFetch, llmVndAntWebSearch, llmVndAntEffort,
     llmVndGeminiAspectRatio, llmVndGeminiImageSize, llmVndGeminiCodeExecution, llmVndGeminiComputerUse, llmVndGeminiGoogleSearch, llmVndGeminiMediaResolution, llmVndGeminiShowThoughts, llmVndGeminiThinkingBudget, llmVndGeminiThinkingLevel, llmVndGeminiThinkingLevel4,
     // llmVndMoonshotWebSearch,
     llmVndOaiReasoningEffort, llmVndOaiReasoningEffort4, llmVndOaiReasoningEffort52, llmVndOaiReasoningEffort52Pro, llmVndOaiRestoreMarkdown, llmVndOaiVerbosity, llmVndOaiWebSearchContext, llmVndOaiWebSearchGeolocation, llmVndOaiImageGeneration,
     llmVndOrtWebSearch,
     llmVndPerplexityDateFilter, llmVndPerplexitySearchMode,
-    llmVndXaiSearchMode, llmVndXaiSearchSources, llmVndXaiSearchDateFilter,
+    // xAI
+    llmVndXaiCodeExecution, llmVndXaiSearchInterval, llmVndXaiWebSearch, llmVndXaiXSearch, llmVndXaiXSearchHandles,
   } = {
     ...llmOptions,
     ...llmOptionOverrides,
@@ -94,12 +96,13 @@ export function aixCreateModelFromLLMOptions(
       console.log(`[DEV] AIX: Geolocation is requested for model ${debugLlmId}, but it's not available.`);
   }
 
-  return {
+  return stripUndefined({
     id: llmRef,
     acceptsOutputs: acceptsOutputs,
     ...(hotfixOmitTemperature ? { temperature: null } : llmTemperature !== undefined ? { temperature: llmTemperature } : {}),
     ...(llmResponseTokens /* null: similar to undefined, will omit the value */ ? { maxTokens: llmResponseTokens } : {}),
     ...(llmTopP !== undefined ? { topP: llmTopP } : {}),
+    ...(llmForceNoStream ? { forceNoStream: true } : {}),
     ...(llmVndAntThinkingBudget !== undefined ? { vndAntThinkingBudget: llmVndAntThinkingBudget } : {}),
     ...(llmVndAnt1MContext ? { vndAnt1MContext: llmVndAnt1MContext } : {}),
     ...(llmVndAntSkills ? { vndAntSkills: llmVndAntSkills } : {}),
@@ -121,7 +124,10 @@ export function aixCreateModelFromLLMOptions(
     // ...(llmVndGeminiUrlContext === 'auto' ? { vndGeminiUrlContext: llmVndGeminiUrlContext } : {}),
     // ...(llmVndMoonshotWebSearch === 'auto' ? { vndMoonshotWebSearch: 'auto' } : {}),
     ...(llmVndOaiResponsesAPI ? { vndOaiResponsesAPI: true } : {}),
-    ...((llmVndOaiReasoningEffort52Pro || llmVndOaiReasoningEffort52 || llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort) ? { vndOaiReasoningEffort: llmVndOaiReasoningEffort52Pro || llmVndOaiReasoningEffort52 || llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort } : {}),
+    ...((llmVndOaiReasoningEffort52Pro || llmVndOaiReasoningEffort52 || llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort) ? {
+      vndOaiReasoningEffort: llmVndOaiReasoningEffort52Pro || llmVndOaiReasoningEffort52 || llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort,
+      vndOaiReasoningSummary: llmForceNoStream ? 'none' /* we disable the summaries, to not require org verification */ : 'detailed',
+    } : {}),
     ...(llmVndOaiRestoreMarkdown ? { vndOaiRestoreMarkdown: llmVndOaiRestoreMarkdown } : {}),
     ...(llmVndOaiVerbosity ? { vndOaiVerbosity: llmVndOaiVerbosity } : {}),
     ...(llmVndOaiWebSearchContext ? { vndOaiWebSearchContext: llmVndOaiWebSearchContext } : {}),
@@ -130,10 +136,13 @@ export function aixCreateModelFromLLMOptions(
     ...(llmVndPerplexityDateFilter ? { vndPerplexityDateFilter: llmVndPerplexityDateFilter } : {}),
     ...(llmVndPerplexitySearchMode ? { vndPerplexitySearchMode: llmVndPerplexitySearchMode } : {}),
     ...(userGeolocation ? { userGeolocation } : {}),
-    ...(llmVndXaiSearchMode ? { vndXaiSearchMode: llmVndXaiSearchMode } : {}),
-    ...(llmVndXaiSearchSources ? { vndXaiSearchSources: llmVndXaiSearchSources } : {}),
-    ...(llmVndXaiSearchDateFilter ? { vndXaiSearchDateFilter: llmVndXaiSearchDateFilter } : {}),
-  };
+    // xAI
+    ...(llmVndXaiCodeExecution === 'auto' ? { vndXaiCodeExecution: llmVndXaiCodeExecution } : {}),
+    ...(llmVndXaiSearchInterval ? { vndXaiSearchInterval: llmVndXaiSearchInterval } : {}),
+    ...(llmVndXaiWebSearch === 'auto' ? { vndXaiWebSearch: llmVndXaiWebSearch } : {}),
+    ...(llmVndXaiXSearch === 'auto' ? { vndXaiXSearch: llmVndXaiXSearch } : {}),
+    ...(llmVndXaiXSearchHandles ? { vndXaiXSearchHandles: llmVndXaiXSearchHandles } : {}),
+  });
 }
 
 
@@ -424,7 +433,6 @@ function _llToText(src: AixChatGenerateContent_LL, dest: AixChatGenerateText_Sim
  * - vendor-specific rate limit
  * - 'pendingIncomplete' logic
  * - 'o1-preview' hotfix for OpenAI models
- * - [NOT PORTED YET: checks for harmful content with the free 'moderation' API (OpenAI-only)]
  *
  * @param llmId - ID of the Language Model to use
  * @param aixChatGenerate - Multi-modal chat generation request specifics, including Tools and high-level metadata
@@ -460,13 +468,7 @@ export async function aixChatGenerateContent_DMessage_orThrow<TServiceSettings e
   if (shallDisableStreaming || aixModel.forceNoStream)
     aixStreaming = false;
 
-
-  // [OpenAI-only] check for harmful content with the free 'moderation' API, if the user requests so
-  // if (aixAccess.dialect === 'openai' && aixAccess.moderationCheck) {
-  //   const moderationUpdate = await _openAIModerationCheck(aixAccess, messages.at(-1) ?? null);
-  //   if (moderationUpdate)
-  //     return onUpdate({ textSoFar: moderationUpdate, typing: false }, true);
-  // }
+  // Legacy Note: awaited OpenAI moderation check was removed (was only on this codepath)
 
   // Aix Low-Level Chat Generation
   const dMessage: AixChatGenerateContent_DMessageGuts = {
@@ -620,6 +622,7 @@ async function _aixChatGenerateContent_LL(
 
   // Inspector support - can be requested by the client, but granted on the server side
   const inspectorEnabled = getAixInspectorEnabled();
+  const inspectorTransport = inspectorEnabled ? aixAccess.clientSideFetch ? 'csf' as const : 'trpc' as const : undefined;
   const inspectorContext = inspectorEnabled ? { contextName: aixContext.name, contextRef: aixContext.ref } : undefined;
 
   /**
@@ -682,6 +685,7 @@ async function _aixChatGenerateContent_LL(
     const reassembler = new ContentReassembler(
       accumulator_LL, // FIXME: TEMP: moved the accumulator outside to keep appending to it (recreating new ContentReassembler each retry)
       sendContentUpdate,
+      inspectorTransport,
       inspectorContext,
       abortSignal,
     );
@@ -696,9 +700,10 @@ async function _aixChatGenerateContent_LL(
           aixAccess,
           aixModel,
           aixChatGenerate,
+          aixContext,
           getLabsDevNoStreaming() ? false : aixStreaming,
+          aixConnectionOptions,
           abortSignal,
-          !!aixConnectionOptions?.enableResumability,
         );
 
       // AIX tRPC Streaming Generation from Chat input

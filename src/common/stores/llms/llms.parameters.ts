@@ -69,6 +69,12 @@ export const DModelParameterRegistry = {
   /**
    * First introduced as a user-configurable parameter for the 'Verification' required by o3.
    * [2025-04-16] Adding parameter to disable streaming for o3, and possibly more models.
+   *
+   * [2026-01-21] OpenAI Responses API: Reasoning Summaries require organization verification.
+   * Per OpenAI docs, both streaming AND reasoning summaries require org verification for GPT-5/5.1/5.2.
+   *  - https://help.openai.com/en/articles/10362446-api-model-availability-by-usage-tier-and-verification-status
+   *  - Rather than adding a separate param, we piggyback on llmForceNoStream.
+   *  - AIX Wire type `vndOaiReasoningSummary` is derived from `llmForceNoStream` in aix.client.ts.
    */
   llmForceNoStream: {
     label: 'Disable Streaming',
@@ -240,6 +246,11 @@ export const DModelParameterRegistry = {
   } as const,
 
   // OpenAI-specific parameters
+  // Reasoning effort levels per model:
+  // - GPT-5: minimal, low, medium (default), high
+  // - GPT-5.1: none (default), low, medium, high
+  // - GPT-5.2: none (default), low, medium, high, xhigh
+  // - GPT-5.2 Pro: medium (default), high, xhigh
 
   llmVndOaiReasoningEffort: {
     label: 'Reasoning Effort',
@@ -347,27 +358,44 @@ export const DModelParameterRegistry = {
 
   // xAI-specific parameters
 
-  llmVndXaiSearchMode: {
-    label: 'Search Mode',
+  llmVndXaiCodeExecution: {
+    label: 'Code Execution',
     type: 'enum' as const,
-    description: 'Controls when to use live search',
-    values: ['auto', 'on', 'off'] as const,
-    initialValue: 'auto', // we default to auto for our users, to get them search out of the box
+    description: 'Enable server-side code execution by the model',
+    values: ['off', 'auto'] as const,
+    // No initialValue - undefined means off (same as 'off')
   } as const,
 
-  llmVndXaiSearchSources: {
-    label: 'Search Sources',
-    type: 'string' as const,
-    description: 'Comma-separated sources (web,x,news,rss)',
-    initialValue: 'web,x', // defaults to web,x as per xAI docs
-  } as const,
-
-  llmVndXaiSearchDateFilter: {
-    label: 'Search From Date',
+  llmVndXaiSearchInterval: {
+    label: 'Search Interval', // "X Search only" for now, fw comp to web search
     type: 'enum' as const,
-    description: 'Filter search results by publication date',
+    description: 'Search in this interval',
     values: ['unfiltered', '1d', '1w', '1m', '6m', '1y'] as const,
-    // requiredFallback: 'unfiltered',
+    // No initialValue - undefined means unfiltered
+  } as const,
+
+  llmVndXaiWebSearch: {
+    label: 'Web Search',
+    type: 'enum' as const,
+    description: 'Enable web search for real-time information',
+    values: ['off', 'auto'] as const,
+    // No initialValue - undefined means off (same as 'off')
+  } as const,
+
+  llmVndXaiXSearch: {
+    label: 'X Search',
+    type: 'enum' as const,
+    description: 'Enable X/Twitter search for social media content',
+    values: ['off', 'auto'] as const,
+    // NOTE: disabling or this could be slow
+    // initialValue: 'auto', // we default to 'auto' for our users, as they may expect "X search" out of the box
+  } as const,
+
+  llmVndXaiXSearchHandles: {
+    label: 'X Handles Filter',
+    type: 'string' as const,
+    description: 'Filter X search to specific handles (comma-separated, e.g. @elonmusk, @xai)',
+    // initialValue: '', // empty = no filter
   } as const,
 
 } as const;
@@ -441,17 +469,21 @@ export function applyModelParameterInitialValues(destValues: DModelParameterValu
 }
 
 
-const _requiredParamId: DModelParameterId[] = [
+/**
+ * Implicit common parameters always supported by all models, not listed in parameterSpecs.
+ * Must be preserved during model refresh operations.
+ */
+export const LLMS_ImplicitParamIds: readonly DModelParameterId[] = [
   // 'llmRef', // disabled: we know this can't have a fallback value in the registry
   'llmResponseTokens', // DModelParameterRegistry.llmResponseTokens.requiredFallback = FALLBACK_LLM_PARAM_RESPONSE_TOKENS
   'llmTemperature', // DModelParameterRegistry.llmTemperature.requiredFallback = FALLBACK_LLM_PARAM_TEMPERATURE
-] as const;
+];
 
 export function getAllModelParameterValues(initialParameters: undefined | DModelParameterValues, userParameters?: DModelParameterValues): DModelParameterValues {
 
   // fallback values
   const fallbackParameters: DModelParameterValues = {};
-  for (const requiredParamId of _requiredParamId) {
+  for (const requiredParamId of LLMS_ImplicitParamIds) {
     if ('requiredFallback' in DModelParameterRegistry[requiredParamId])
       fallbackParameters[requiredParamId] = DModelParameterRegistry[requiredParamId].requiredFallback as DModelParameterValue<typeof requiredParamId>;
   }

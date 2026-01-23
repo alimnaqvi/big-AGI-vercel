@@ -1,15 +1,20 @@
 import { LLM_IF_OAI_Chat, LLM_IF_OAI_Fn } from '~/common/stores/llms/llms.types';
+import { Release } from '~/common/app.release';
 
 import type { ModelDescriptionSchema } from '../../llm.server.types';
-import { fromManualMapping, ManualMappings } from '../../models.mappings';
+import { fromManualMapping, llmDevCheckModels_DEV, ManualMappings } from '../../models.mappings';
 import { wireGroqModelsListOutputSchema } from '../wiretypes/groq.wiretypes';
+
+
+// dev options
+const DEV_DEBUG_GROQ_MODELS = Release.IsNodeDevBuild; // not in staging to reduce noise
 
 
 /**
  * Groq models.
  * - models list: https://console.groq.com/docs/models
  * - pricing: https://groq.com/pricing/
- * - updated: 2026-01-14
+ * - updated: 2026-01-21
  */
 const _knownGroqModels: ManualMappings = [
 
@@ -65,6 +70,12 @@ const _knownGroqModels: ManualMappings = [
     chatPrice: { input: 1.00, output: 3.00 },
     hidden: true,
   },
+  // REMOVED MODELS (no longer returned by API as of Jan 21, 2026):
+  // - qwen-qwq-32b (QwQ 32B reasoning model)
+  // - qwen-2.5-32b (Qwen 2.5 32B general-purpose)
+  // - qwen-2.5-coder-32b (Qwen 2.5 Coder 32B)
+  // - deepseek-r1-distill-llama-70b (DeepSeek R1 Distill Llama 70B)
+  // - deepseek-r1-distill-qwen-32b (DeepSeek R1 Distill Qwen 32B)
 
 
   // Production Models - Compound Systems (pass-through pricing to underlying models)
@@ -98,8 +109,9 @@ const _knownGroqModels: ManualMappings = [
     chatPrice: { input: 0.15, output: 0.60 },
   },
   {
+    isPreview: true,
     idPrefix: 'openai/gpt-oss-safeguard-20b',
-    label: 'GPT OSS Safeguard 20B',
+    label: 'GPT OSS Safeguard 20B (Preview)',
     description: 'OpenAI safety classification model (20B MoE). Purpose-built for content moderation with Harmony response format. 131K context, 65K max output. ~1000 t/s on Groq.',
     contextWindow: 131072,
     maxCompletionTokens: 65536,
@@ -198,6 +210,13 @@ export function groqModelToModelDescription(_model: unknown): ModelDescriptionSc
 
   return description;
 }
+
+export function groqValidateModelDefs_DEV(apiModelIds: string[]): void {
+  if (DEV_DEBUG_GROQ_MODELS) {
+    llmDevCheckModels_DEV('Groq', apiModelIds, _knownGroqModels.map(m => m.idPrefix), { checkUnknown: false });
+  }
+}
+
 
 export function groqModelSortFn(a: ModelDescriptionSchema, b: ModelDescriptionSchema): number {
   // sort hidden at the end

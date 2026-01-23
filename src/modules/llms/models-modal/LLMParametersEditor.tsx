@@ -11,6 +11,7 @@ import { DModelParameterId, DModelParameterRegistry, DModelParameterSpec, DModel
 import { FormSelectControl } from '~/common/components/forms/FormSelectControl';
 import { FormSliderControl } from '~/common/components/forms/FormSliderControl';
 import { FormSwitchControl } from '~/common/components/forms/FormSwitchControl';
+import { FormTextField } from '~/common/components/forms/FormTextField';
 import { InlineError } from '~/common/components/InlineError';
 import { useUIComplexityMode } from '~/common/stores/store-ui';
 import { webGeolocationRequest } from '~/common/util/webGeolocationUtils';
@@ -33,17 +34,17 @@ const _reasoningEffort4Options = [
   { value: _UNSPECIFIED, label: 'Default', description: 'Default value (unset)' } as const,
 ] as const;
 const _reasoningEffort52Options = [
-  { value: 'xhigh', label: 'Max', description: 'Hardest thinking, best quality' } as const,
+  { value: 'xhigh', label: 'X-High', description: 'Hardest thinking, best quality' } as const,
   { value: 'high', label: 'High', description: 'Deep, thorough analysis' } as const,
   { value: 'medium', label: 'Medium', description: 'Balanced reasoning depth' } as const,
   { value: 'low', label: 'Low', description: 'Quick, concise responses' } as const,
-  { value: _UNSPECIFIED, label: 'Default', description: '-' } as const,
+  { value: _UNSPECIFIED, label: 'None', description: 'Default (no reasoning)' } as const,
 ] as const;
 const _reasoningEffort52ProOptions = [
-  { value: 'xhigh', label: 'Max', description: 'Hardest thinking, best quality' } as const,
+  { value: 'xhigh', label: 'X-High', description: 'Hardest thinking, best quality' } as const,
   { value: 'high', label: 'High', description: 'Deep, thorough analysis' } as const,
   { value: 'medium', label: 'Medium', description: 'Balanced reasoning depth' } as const,
-  { value: _UNSPECIFIED, label: 'Default', description: '-' } as const,
+  { value: _UNSPECIFIED, label: 'Default', description: 'Default (medium)' } as const,
 ] as const;
 const _verbosityOptions = [
   { value: 'high', label: 'Detailed', description: 'Thorough responses, great for audits' } as const,
@@ -126,12 +127,6 @@ const _geminiThinkingLevel4Options = [
   { value: _UNSPECIFIED, label: 'Default', description: 'Model decides' },
 ] as const;
 
-const _xaiSearchModeOptions = [
-  { value: 'auto', label: 'Auto', description: 'Model decides (default)' },
-  { value: 'on', label: 'On', description: 'Always search active sources' },
-  { value: 'off', label: 'Off', description: 'Never perform a search' },
-] as const;
-
 const _antWebSearchOptions = [
   { value: 'auto', label: 'On', description: 'Enable web search for real-time information' },
   { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
@@ -143,9 +138,10 @@ const _antWebFetchOptions = [
 ] as const;
 
 const _antEffortOptions = [
-  { value: _UNSPECIFIED, label: 'High', description: 'Maximum capability (default)' },
+  { value: 'high', label: 'High', description: 'Maximum capability' },
   { value: 'medium', label: 'Medium', description: 'Balanced speed and quality' },
   { value: 'low', label: 'Low', description: 'Fastest, most efficient' },
+  { value: _UNSPECIFIED, label: 'Default', description: 'Default value (High)' },
 ] as const;
 
 // const _moonshotWebSearchOptions = [
@@ -166,8 +162,28 @@ const _imageGenerationOptions = [
   // { value: 'hq_png', label: 'HD PNG', description: 'Uncompressed' }, // TODO: re-enable when uncompressed PNG saving is implemented
 ] as const;
 
-const _xaiDateFilterOptions = [
-  { value: 'unfiltered', label: 'All Time', description: 'No date restriction' },
+
+// XAI
+
+const _xaiWebSearchOptions = [
+  { value: 'auto', label: 'On', description: 'Real-time web results' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
+const _xaiXSearchOptions = [
+  { value: 'auto', label: 'On', description: 'Active (Big-AGI default)' },
+  { value: 'off', label: 'Off', description: 'Disabled' },
+] as const;
+
+const _xaiCodeExecutionOptions = [
+  { value: 'auto', label: 'On', description: 'Server-side code execution' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
+const _xaiSearchIntervalOptions = [
+  { value: _UNSPECIFIED, label: 'No Filter', description: 'No date restriction' },
+  // Note: the wire format also accepts 'unfiltered', but we use _UNSPECIFIED (undefined) for clarity - both are equivalent on the server
+  // { value: 'unfiltered', ... },
   { value: '1d', label: 'Last Day', description: 'Results from last 24 hours' },
   { value: '1w', label: 'Last Week', description: 'Results from last 7 days' },
   { value: '1m', label: 'Last Month', description: 'Results from last 30 days' },
@@ -242,9 +258,12 @@ export function LLMParametersEditor(props: {
     llmVndOrtWebSearch,
     llmVndPerplexityDateFilter,
     llmVndPerplexitySearchMode,
-    llmVndXaiSearchMode,
-    llmVndXaiSearchSources,
-    llmVndXaiSearchDateFilter,
+
+    llmVndXaiCodeExecution,
+    llmVndXaiSearchInterval,
+    llmVndXaiWebSearch,
+    llmVndXaiXSearch,
+    llmVndXaiXSearchHandles,
   } = allParameters;
 
 
@@ -355,7 +374,7 @@ export function LLMParametersEditor(props: {
         tooltip='Controls token usage vs. thoroughness. Low = fastest, most efficient. High = maximum capability (default). Works alongside thinking budget.'
         value={llmVndAntEffort ?? _UNSPECIFIED}
         onChange={(value) => {
-          if (value === _UNSPECIFIED || !value || value === 'high') onRemoveParameter('llmVndAntEffort');
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndAntEffort');
           else onChangeParameter({ llmVndAntEffort: value });
         }}
         options={_antEffortOptions}
@@ -729,8 +748,8 @@ export function LLMParametersEditor(props: {
     {showParam('llmForceNoStream') && (
       <FormSwitchControl
         title='Disable Streaming'
-        description='Receive complete responses'
-        tooltip='Turn on to get entire responses at once. Useful for models with streaming issues, but will make responses appear slower.'
+        description='For unverified OpenAI orgs'
+        tooltip='Disables streaming and reasoning summaries, which both require OpenAI organization verification. Enable if you get verification errors with GPT-5 models.'
         checked={!!llmForceNoStream}
         onChange={checked => {
           if (!checked)
@@ -756,59 +775,64 @@ export function LLMParametersEditor(props: {
     )}
 
 
-    {showParam('llmVndXaiSearchMode') && (
+    {showParam('llmVndXaiCodeExecution') && (
       <FormSelectControl
-        title='Search Mode'
-        tooltip='Controls when to search'
-        value={llmVndXaiSearchMode ?? 'auto'}
-        onChange={value => onChangeParameter({ llmVndXaiSearchMode: value })}
-        options={_xaiSearchModeOptions}
+        title='Run Code'
+        value={llmVndXaiCodeExecution ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value || value === 'off') onRemoveParameter('llmVndXaiCodeExecution');
+          else onChangeParameter({ llmVndXaiCodeExecution: value });
+        }}
+        options={_xaiCodeExecutionOptions}
       />
     )}
 
-    {showParam('llmVndXaiSearchSources') && (
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, ml: 0 }}>
-        {[
-          { key: 'web', label: 'Web Search', description: 'Search websites' },
-          { key: 'x', label: 'X Posts', description: 'Search X posts' },
-          { key: 'news', label: 'News', description: 'Search news' },
-        ].map(({ key, label, description }) => {
-          const currentSources = llmVndXaiSearchSources?.split(',').map(s => s.trim()).filter(Boolean) || [];
-          const isEnabled = currentSources.includes(key);
-          const searchIsOff = llmVndXaiSearchMode === 'off';
-
-          return (
-            <FormSwitchControl
-              key={key}
-              title={label}
-              description={description}
-              checked={isEnabled}
-              disabled={searchIsOff}
-              onChange={checked => {
-                const newSources = currentSources.filter(s => s !== key);
-                if (checked) newSources.push(key);
-                const newValue = newSources.length > 0 ? newSources.join(',') : undefined;
-                onChangeParameter({ llmVndXaiSearchSources: newValue || 'web,x' });
-              }}
-            />
-          );
-        })}
-      </Box>
+    {showParam('llmVndXaiWebSearch') && (
+      <FormSelectControl
+        title='Web Search'
+        value={llmVndXaiWebSearch ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value || value === 'off') onRemoveParameter('llmVndXaiWebSearch');
+          else onChangeParameter({ llmVndXaiWebSearch: value });
+        }}
+        options={_xaiWebSearchOptions}
+      />
     )}
 
-    {showParam('llmVndXaiSearchDateFilter') && (
+    {showParam('llmVndXaiXSearch') && (
       <FormSelectControl
-        title='Search Period'
-        // tooltip='Recency of search results'
-        disabled={llmVndXaiSearchMode === 'off'}
-        value={llmVndXaiSearchDateFilter ?? 'unfiltered'}
+        title='X Search'
+        value={llmVndXaiXSearch ?? 'auto'}
+        onChange={(value) => onChangeParameter({ llmVndXaiXSearch: value /* we don't remove because there's a default to this param, so we must user-override it */ })}
+        options={_xaiXSearchOptions}
+      />
+    )}
+
+    {showParam('llmVndXaiSearchInterval') && (
+      <FormSelectControl
+        title='X Search Period'
+        disabled={llmVndXaiXSearch !== 'auto'}
+        value={llmVndXaiSearchInterval ?? _UNSPECIFIED}
         onChange={(value) => {
-          if (value === 'unfiltered' || !value)
-            onRemoveParameter('llmVndXaiSearchDateFilter');
-          else
-            onChangeParameter({ llmVndXaiSearchDateFilter: value });
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndXaiSearchInterval');
+          else onChangeParameter({ llmVndXaiSearchInterval: value });
         }}
-        options={_xaiDateFilterOptions}
+        options={_xaiSearchIntervalOptions}
+      />
+    )}
+
+    {showParam('llmVndXaiXSearchHandles') && llmVndXaiXSearch === 'auto' && (
+      <FormTextField
+        autoCompleteId='xai-x-handles'
+        title='X Search Handles'
+        description='Optional filter'
+        placeholder='@user1, @user2'
+        value={llmVndXaiXSearchHandles ?? ''}
+        onChange={(value) => {
+          if (!value.trim()) onRemoveParameter('llmVndXaiXSearchHandles');
+          else onChangeParameter({ llmVndXaiXSearchHandles: value });
+        }}
+        inputSx={{ maxWidth: 220 }}
       />
     )}
 

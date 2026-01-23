@@ -1,5 +1,6 @@
 import * as z from 'zod/v4';
 
+import type { DModelParameterId } from '~/common/stores/llms/llms.parameters'; // imported for making sure we sync
 import { LLMS_ALL_INTERFACES } from '~/common/stores/llms/llms.types';
 
 
@@ -114,10 +115,12 @@ const ModelParameterSpec_schema = z.object({
     'llmVndPerplexityDateFilter',
     'llmVndPerplexitySearchMode',
     // xAI
-    'llmVndXaiSearchMode',
-    'llmVndXaiSearchSources',
-    'llmVndXaiSearchDateFilter',
-  ]),
+    'llmVndXaiCodeExecution',
+    'llmVndXaiSearchInterval',
+    'llmVndXaiWebSearch',
+    'llmVndXaiXSearch',
+    'llmVndXaiXSearchHandles',
+  ] satisfies DModelParameterId[]),
   required: z.boolean().optional(),
   hidden: z.boolean().optional(),
   initialValue: z.number().or(z.string()).or(z.boolean()).nullable().optional(),
