@@ -13,9 +13,9 @@ COPY src/server/prisma ./src/server/prisma
 # link ssl3 for latest Alpine
 RUN sh -c '[ ! -e /lib/libssl.so.3 ] && ln -s /usr/lib/libssl.so.3 /lib/libssl.so.3 || echo "Link already exists"'
 
-# Install dependencies, including dev (release builds should use npm ci)
+# Install dependencies, including dev
 ENV NODE_ENV=development
-RUN npm ci
+RUN npm install
 
 
 # Builder
