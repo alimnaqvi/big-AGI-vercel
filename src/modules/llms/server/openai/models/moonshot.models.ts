@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 
-import { LLM_IF_HOTFIX_StripImages, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_PromptCaching, LLM_IF_OAI_Reasoning, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
+import { LLM_IF_HOTFIX_NoTemperature, LLM_IF_HOTFIX_StripImages, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_PromptCaching, LLM_IF_OAI_Reasoning, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
 
 import type { ModelDescriptionSchema } from '../../llm.server.types';
 import { fromManualMapping, ManualMappings } from '../../models.mappings';
@@ -13,14 +13,37 @@ const IF_K2 = [
 ];
 const IF_K2_REASON = [...IF_K2, LLM_IF_OAI_Reasoning];
 
+const IF_K2_5 = [
+  LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_PromptCaching,
+  LLM_IF_OAI_Vision, // this is supported since 2.5
+  LLM_IF_HOTFIX_NoTemperature, // no temperature control
+];
+
+const _PS_Reasoning: ModelDescriptionSchema['parameterSpecs'] = [
+  { paramId: 'llmVndMiscEffort', enumValues: ['none', 'high'] },
+] as const;
+
 
 /**
  * Moonshot AI (Kimi) models.
  * - models list and pricing: https://platform.moonshot.ai/docs/pricing/chat
  * - API docs: https://platform.moonshot.ai/docs/api/chat
- * - updated: 2026-01-21
+ * - updated: 2026-01-26
  */
 const _knownMoonshotModels: ManualMappings = [
+
+  // Kimi K2.5 Series
+  {
+    idPrefix: 'kimi-k2.5',
+    label: 'Kimi K2.5',
+    description: 'Most intelligent Kimi model with native multimodal architecture. Supports vision (images/videos), thinking mode, and Agent tasks. Open-source SoTA in coding and visual understanding. 256K context.',
+    contextWindow: 262144,
+    maxCompletionTokens: 32768,
+    interfaces: IF_K2_5,
+    parameterSpecs: _PS_Reasoning,
+    chatPrice: { input: 0.60, output: 3.00, cache: { cType: 'oai-ac', read: 0.10 } },
+    benchmark: { cbaElo: 1450 }, // kimi-k2.5-thinking
+  },
 
   // Kimi K2 Series - Latest Models
 
@@ -32,9 +55,9 @@ const _knownMoonshotModels: ManualMappings = [
     contextWindow: 262144,
     maxCompletionTokens: 65536,
     interfaces: IF_K2_REASON,
-    chatPrice: { input: 1.15, output: 8.00, cache: { cType: 'oai-ac', read: 0.15 } },
-    benchmark: { cbaElo: 1417 + 1 }, // UNKNOWN +1 over 0905, but don't want to be above the non-turbo
     // parameterSpecs: [{ paramId: 'llmVndMoonshotWebSearch' }], // NOT WORKING YET
+    chatPrice: { input: 1.15, output: 8.00, cache: { cType: 'oai-ac', read: 0.15 } },
+    benchmark: { cbaElo: 1429 }, // kimi-k2-thinking-turbo
   },
   // Thinking
   {
@@ -44,9 +67,9 @@ const _knownMoonshotModels: ManualMappings = [
     contextWindow: 262144,
     maxCompletionTokens: 65536,
     interfaces: IF_K2_REASON,
+    // parameterSpecs: [{ paramId: 'llmVndMoonshotWebSearch' }],
     chatPrice: { input: 0.60, output: 2.50, cache: { cType: 'oai-ac', read: 0.15 } },
     benchmark: { cbaElo: 1417 + 2 }, // UNKNOWN +2 over 0905, to be at the top here
-    // parameterSpecs: [{ paramId: 'llmVndMoonshotWebSearch' }],
   },
 
   // K2
@@ -57,10 +80,10 @@ const _knownMoonshotModels: ManualMappings = [
     contextWindow: 262144,
     maxCompletionTokens: 32768,
     interfaces: IF_K2,
+    // parameterSpecs: [{ paramId: 'llmVndMoonshotWebSearch' }],
     chatPrice: { input: 0.60, output: 2.50, cache: { cType: 'oai-ac', read: 0.15 } },
     isPreview: true,
-    benchmark: { cbaElo: 1417 },
-    // parameterSpecs: [{ paramId: 'llmVndMoonshotWebSearch' }],
+    benchmark: { cbaElo: 1418 }, // kimi-k2-0905-preview
   },
   {
     hidden: true,
@@ -70,10 +93,10 @@ const _knownMoonshotModels: ManualMappings = [
     contextWindow: 131072,
     maxCompletionTokens: 16384,
     interfaces: IF_K2,
+    // parameterSpecs: [{ paramId: 'llmVndMoonshotWebSearch' }],
     chatPrice: { input: 0.60, output: 2.50, cache: { cType: 'oai-ac', read: 0.15 } },
     isPreview: true,
-    benchmark: { cbaElo: 1415 },
-    // parameterSpecs: [{ paramId: 'llmVndMoonshotWebSearch' }],
+    benchmark: { cbaElo: 1417 }, // kimi-k2-0711-preview
   },
   {
     idPrefix: 'kimi-k2-turbo-preview',
@@ -82,9 +105,9 @@ const _knownMoonshotModels: ManualMappings = [
     contextWindow: 262144,
     maxCompletionTokens: 32768,
     interfaces: IF_K2,
+    // parameterSpecs: [{ paramId: 'llmVndMoonshotWebSearch' }],
     chatPrice: { input: 1.15, output: 8.00, cache: { cType: 'oai-ac', read: 0.15 } },
     isPreview: true,
-    // parameterSpecs: [{ paramId: 'llmVndMoonshotWebSearch' }],
   },
 
   // Legacy Moonshot V1 Models (deprecated, prefer K2 series)

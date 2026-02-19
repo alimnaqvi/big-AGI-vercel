@@ -58,7 +58,7 @@ export namespace OpenAIWire_ContentParts {
   }
 
   export function ImageContentPart(url: string, detail?: 'auto' | 'low' | 'high'): z.infer<typeof ImageContentPart_schema> {
-    return { type: 'image_url', image_url: { url, detail } };
+    return { type: 'image_url', image_url: { url, ...(detail && { detail }) } };
   }
 
   export function OpenAI_AudioContentPart(data: string, format: 'wav' | 'mp3'): z.infer<typeof OpenAI_AudioContentPart_schema> {
@@ -115,8 +115,8 @@ export namespace OpenAIWire_ContentParts {
       z.enum(['reasoning.summary', 'reasoning.text', 'reasoning.encrypted']),
       z.string(),
     ]),
-    text: z.string().optional(), // Actual reasoning text (for 'text' type)
-    summary: z.string().optional(), // Summary of reasoning (for 'summary' type)
+    text: z.string().nullish(), // Actual reasoning text (for 'text' type)
+    summary: z.string().nullish(), // Summary of reasoning (for 'summary' type)
     // we don't use these for now:
     // signature: z.string().nullable().optional(), // Signature verification (for 'text' type)
     // // 'encrypted' type has 'data' field - indicates reasoning happened but not returned
@@ -300,8 +300,8 @@ export namespace OpenAIWire_API_Chat_Completions {
     parallel_tool_calls: z.boolean().optional(), // defaults to true
 
     // common model configuration
-    max_completion_tokens: z.number().int().positive().optional(), // [OpenAI o1, 2024-09-12]
-    max_tokens: z.number().optional(), // Deprecated in favor of max_completion_tokens - but still used by pre-o1 models and OpenAI-compatible APIs
+    max_completion_tokens: z.number().int().positive().optional(),
+    max_tokens: z.number().optional(), // DEPRECATED
     temperature: z.number().min(0).max(2).optional(),
     top_p: z.number().min(0).max(1).optional(),
 
@@ -332,6 +332,12 @@ export namespace OpenAIWire_API_Chat_Completions {
       include_usage: z.boolean().optional(), // If set, an additional chunk will be streamed with a 'usage' field on the entire request.
     }).optional(),
     reasoning_effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(), // [OpenAI, 2024-12-17] [Perplexity, 2025-06-23] reasoning effort
+    // OpenAI and [OpenRouter, 2025-01-20] Verbosity parameter - maps to output_config.effort for Anthropic models
+    // https://openrouter.ai/docs/api/reference/parameters#verbosity
+    verbosity: z.enum([
+      'low', 'medium', 'high',
+      'max', // [OpenRouter, 2026-02-06] Anthropic-through-openrouter has its effort mapped to 'verbosity'
+    ]).optional(), // 'max' is Opus 4.6 only
     // [OpenRouter, 2025-11-11] Unified reasoning parameter for all models
     reasoning: z.object({
       max_tokens: z.int().optional(), // Token-based control (Anthropic, Gemini): 1024-32000
@@ -399,24 +405,56 @@ export namespace OpenAIWire_API_Chat_Completions {
     // -- Vendor-specific extensions to the request --
 
     // [OpenRouter, 2025-10-22] OpenRouter-specific plugins parameter for web search and other hosted tools
-    plugins: z.array(z.object({
-      id: z.literal('web'), // plugin identifier, e.g., 'web
-      engine: z.enum(['native', 'exa']).optional(), // search engine: 'native', 'exa', or undefined (auto)
-      max_results: z.number().int().positive().optional(), // defaults to 5
-      search_prompt: z.string().optional(), // custom search prompt
-    })).optional(),
+    plugins: z.array(z.union([
+      z.object({
+        id: z.literal('web'),
+        engine: z.enum(['native', 'exa']).optional(), // search engine: 'native', 'exa', or undefined (auto)
+        max_results: z.number().int().positive().optional(), // defaults to 5
+        search_prompt: z.string().optional(), // custom search prompt
+      }),
+      // [OpenRouter, 2026-02-06] Auto-fixes malformed JSON/tool calls from providers - DISABLED for now
+      // z.object({
+      //   id: z.literal('response-healing'),
+      //   enabled: z.boolean().optional(),
+      // }),
+    ])).optional(),
 
-    // [OpenRouter, 2025-01-20] Verbosity parameter - maps to output_config.effort for Anthropic models (Claude Opus 4.5)
-    // https://openrouter.ai/docs/api/reference/parameters#verbosity
-    verbosity: z.enum(['low', 'medium', 'high']).optional(),
+    // [OpenRouter, 2026-02-06] Provider routing preferences
+    provider: z.object({
+      require_parameters: z.boolean().optional(), // Only route to providers supporting all request params (strict mode)
+      allow_fallbacks: z.boolean().optional(), // Whether to allow backup providers (default: true)
+      data_collection: z.enum(['allow', 'deny']).optional(), // 'deny' = only use providers that don't train on user data
+      sort: z.union([
+        z.enum(['price', 'throughput', 'latency']), // Simple sort preference
+        z.object({
+          by: z.enum(['price', 'throughput', 'latency']).optional(),
+          partition: z.enum(['model', 'none']).optional(),
+        }),
+      ]).optional(),
+      order: z.array(z.string()).optional(), // Ordered list of provider slugs to prefer
+      ignore: z.array(z.string()).optional(), // Provider slugs to skip
+      quantizations: z.array(z.enum(['int4', 'int8', 'fp4', 'fp6', 'fp8', 'fp16', 'bf16', 'fp32', 'unknown'])).optional(),
+    }).optional(),
+
+    // [OpenRouter, 2026-02-06] Debug - echoes what OR sent upstream; not wired, use requestBodyOverride to inject ad-hoc
+    debug: z.object({
+      echo_upstream_body: z.boolean().optional(),
+    }).optional(),
 
     // [Perplexity, 2025-06-23] Perplexity-specific search parameters
     search_mode: z.enum(['academic']).optional(), // Academic filter for scholarly sources
     search_after_date_filter: z.string().optional(), // Date filter in MM/DD/YYYY format
 
+    // [Moonshot, 2026-01-26] Kimi K2.5 thinking mode control
+    thinking: z.object({
+      type: z.enum(['enabled', 'disabled']),
+    }).optional(),
+
     seed: z.number().int().optional(),
     stop: z.array(z.string()).optional(), // Up to 4 sequences where the API will stop generating further tokens.
     user: z.string().optional(),
+    // IGNORING: safety_identifier: z.string().optional(),
+    // IGNORING: prompt_cache_key: z.string().optional(),
 
     // (deprecated upstream, OMITTED BY CHOICE): function_call and functions
 
@@ -472,7 +510,7 @@ export namespace OpenAIWire_API_Chat_Completions {
       reasoning_tokens: z.number().optional(), // [Discord, 2024-04-10] reported missing
       // text_tokens: z.number().optional(), // [Discord, 2024-04-10] revealed as present on custom OpenAI endpoint - not using it here yet
       audio_tokens: z.number().optional(), // [OpenAI, 2024-10-01] audio tokens used in the completion (charged at a different rate)
-      // image_tokens: z.number().optional(), // [OpenRouter, 2025-10-22] first seen.. sounds likely?
+      // image_tokens: z.number().optional(), // [OpenRouter, 2026-02-06] confirmed: image tokens in image generation output
       accepted_prediction_tokens: z.number().optional(), // [OpenAI, 2024-11-05] Predicted Outputs
       rejected_prediction_tokens: z.number().optional(), // [OpenAI, 2024-11-05] Predicted Outputs
     }).optional() // not present in other APIs yet
@@ -996,7 +1034,7 @@ export namespace OpenAIWire_Responses_Items {
     annotations: z.array(z.object({
       type: z.literal('url_citation'),
       url: z.string(),
-      title: z.string(),
+      title: z.string().optional(), // [xAI] xAI doesn't always send title
       start_index: z.int().optional(),
       end_index: z.int().optional(),
     })).optional(),
@@ -1066,8 +1104,10 @@ export namespace OpenAIWire_Responses_Items {
 
     // BREAKING CHANGE from OpenAI - 2025-12-11
     // redefining the following because we need 'searching' too here (seen during web search streaming)
+    // [XAI] 2025-01-23: added 'failed' as xAI returns this when web search fails
     status: z.enum([
       'searching', // 2025-12-11: seen on OpenAI for `web_search_call` items when used with GPT 5.2 Pro, with web search on
+      'failed', // 2025-01-23: seen on xAI for `web_search_call` items when web search fails
       'in_progress', 'completed', 'incomplete',
     ]).optional(),
 
@@ -1373,10 +1413,18 @@ export namespace OpenAIWire_Responses_Tools {
     size: z.enum(['1024x1024', '1024x1536', '1536x1024', 'auto']).optional(),
   });
 
-  // const CodeInterpreterTool_schema = z.object({
-  //   type: z.literal('code_interpreter'),
-  //   container: z.union([z.string(), z.object({})]), // container ID or object with file IDs
-  // });
+  // Code Interpreter tool - runs Python code in a sandboxed container
+  const CodeInterpreterTool_schema = z.object({
+    type: z.literal('code_interpreter'),
+    container: z.union([
+      z.string(), // explicit container ID
+      z.object({
+        type: z.literal('auto'),
+        file_ids: z.array(z.string()).optional(), // uploaded file IDs to make available
+        memory_limit: z.string().optional(), // e.g., "512m", "1g", "2g", "4g", "8g"
+      }),
+    ]).nullish(), // optional - if omitted, auto mode is used
+  });
 
   // const FileSearchTool_schema = z.object({
   //   type: z.literal('file_search'),
@@ -1398,7 +1446,7 @@ export namespace OpenAIWire_Responses_Tools {
     // hosted tools
     WebSearchTool_schema,
     ImageGenerationTool_schema,
-    // CodeInterpreterTool_schema,
+    CodeInterpreterTool_schema,
     // FileSearchTool_schema, // OpenAI vector store - not implemented
     // MCPTool_schema,
     // ComputerUseTool_schema,
@@ -1422,8 +1470,8 @@ export namespace OpenAIWire_Responses_Tools {
         // 'file_search',
         'web_search', 'web_search_preview', 'web_search_preview_2025_03_11',
         'image_generation',
+        'code_interpreter',
         // 'computer_use_preview',
-        // 'code_interpreter',
         // 'mcp',
         // 'local_shell' ?
       ]),
@@ -1486,11 +1534,11 @@ export namespace OpenAIWire_API_Responses {
     truncation: z.enum(['auto', 'disabled']).nullish(), // defaults to 'disabled', 'auto' drops input items in the middle of the conversation.
     include: z.array(z.enum([
       'web_search_call.action.sources', // get web search citations
+      'code_interpreter_call.outputs', // get code execution logs and images
       // 'file_search_call.results',
       // 'message.input_image.image_url',
       // 'computer_call_output.output.image_url',
       // 'reasoning.encrypted_content',
-      // 'code_interpreter_call.outputs'
     ])).optional(), // additional output to include in the response
     user: z.string().optional(), // stable identifier for your end-users
 
@@ -1510,7 +1558,8 @@ export namespace OpenAIWire_API_Responses {
 
   export type Response = z.infer<typeof Response_schema>;
   export const Response_schema = z.object({
-    object: z.literal('response'),
+    object: z.literal('response')
+      .or(z.literal('chat.completion')), // [LiteLLM, 2026-01-30] Accept 'chat.completion' for proxy compatibility (should be 'response')
 
     id: z.string(), // unique ID for this response
     created_at: z.number(), // unix timestamp (in seconds)
@@ -1566,7 +1615,9 @@ export namespace OpenAIWire_API_Responses {
   // Response - Streaming Events
 
   const _BaseEvent_schema = z.object({
-    sequence_number: z.number(),
+    // [LiteLLM, 2026-01-29] Made optional to support proxies that don't pass through sequence numbers
+    // The parser will validate monotonicity once the first valid sequence_number is seen
+    sequence_number: z.number().optional(),
   });
 
   // Streaming > Response lifecycle

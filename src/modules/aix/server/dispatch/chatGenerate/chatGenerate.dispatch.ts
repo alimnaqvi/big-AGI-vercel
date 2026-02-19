@@ -63,19 +63,26 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
         modelIdForBetaFeatures: model.id,
         vndAntWebFetch: model.vndAntWebFetch === 'auto',
         vndAnt1MContext: model.vndAnt1MContext === true,
-        vndAntEffort: !!model.vndAntEffort,
         enableSkills: !!model.vndAntSkills,
+        enableFastMode: model.vndAntInfSpeed === 'fast',
         enableStrictOutputs: !!model.strictJsonOutput || !!model.strictToolInvocations, // [Anthropic, 2025-11-13] for both JSON output and grammar-constrained tool invocations inputs
         enableToolSearch: !!model.vndAntToolSearch,
         enableProgrammaticToolCalling: usesProgrammaticToolCalling,
         // enableCodeExecution: ...
       });
 
+      // Build the request body from model + chat parameters
+      const anthropicBody = aixToAnthropicMessageCreate(model, chatGenerate, streaming);
+
+      // [Anthropic, 2026-02-01] Service-level inference geo routing (e.g. "us")
+      if (access.anthropicInferenceGeo)
+        anthropicBody.inference_geo = access.anthropicInferenceGeo;
+
       return {
         request: {
           ...anthropicRequest,
           method: 'POST',
-          body: aixToAnthropicMessageCreate(model, chatGenerate, streaming),
+          body: anthropicBody,
         },
         demuxerFormat: streaming ? 'fast-sse' : null,
         chatGenerateParse: streaming ? createAnthropicMessageParser() : createAnthropicMessageParserNS(),
@@ -86,7 +93,7 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
       /**
        * [Gemini, 2025-04-17] For newer thinking parameters, use v1alpha (we only see statistically better results)
        */
-      const useV1Alpha = !!model.vndGeminiShowThoughts || model.vndGeminiThinkingBudget !== undefined;
+      const useV1Alpha = false; // !!model.vndGeminiShowThoughts || model.vndGeminiThinkingBudget !== undefined;
       return {
         request: {
           ...geminiAccess(access, model.id, streaming ? GeminiWire_API_Generate_Content.streamingPostPath : GeminiWire_API_Generate_Content.postPath, useV1Alpha),
@@ -136,6 +143,7 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
     case 'perplexity':
     case 'togetherai':
     case 'xai':
+    case 'zai':
 
       // newer: OpenAI Responses API, for models that support it and all XAI models
       const isResponsesAPI = !!model.vndOaiResponsesAPI;
@@ -164,11 +172,17 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
       }
 
       // default: industry-standard OpenAI ChatCompletions API with per-dialect extensions
+      const chatCompletionsBody = aixToOpenAIChatCompletions(dialect, model, chatGenerate, streaming);
+
+      // [OpenRouter] Service-level provider routing parameter
+      if (dialect === 'openrouter' && access.orRequireParameters)
+        chatCompletionsBody.provider = { ...chatCompletionsBody.provider, require_parameters: true };
+
       return {
         request: {
           ...openAIAccess(access, model.id, OPENAI_API_PATHS.chatCompletions),
           method: 'POST',
-          body: aixToOpenAIChatCompletions(dialect, model, chatGenerate, streaming),
+          body: chatCompletionsBody,
         },
         demuxerFormat: streaming ? 'fast-sse' : null,
         chatGenerateParse: streaming ? createOpenAIChatCompletionsChunkParser() : createOpenAIChatCompletionsParserNS(),
@@ -221,6 +235,7 @@ export function createChatGenerateResumeDispatch(access: AixAPI_Access, resumeHa
     case 'perplexity':
     case 'togetherai':
     case 'xai':
+    case 'zai':
       // Throw on unsupported protocols (Azure and OpenRouter are speculatively supported)
       throw new Error(`Resume not supported for dialect: ${dialect}`);
 

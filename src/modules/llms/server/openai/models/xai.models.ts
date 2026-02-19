@@ -2,7 +2,7 @@ import * as z from 'zod/v4';
 
 import { fetchJsonOrTRPCThrow } from '~/server/trpc/trpc.router.fetchers';
 
-import { LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_OAI_Vision, LLM_IF_Tools_WebSearch } from '~/common/stores/llms/llms.types';
+import { LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
 import { Release } from '~/common/app.release';
 
 import type { ModelDescriptionSchema } from '../../llm.server.types';
@@ -16,7 +16,7 @@ const DEV_DEBUG_XAI_MODELS = (Release.TenantSlug as any) === 'staging' /* ALSO I
 
 // Known xAI Models - Manual Mappings
 // List on: https://docs.x.ai/docs/models?cluster=us-east-1
-// Verified: 2026-01-21
+// Verified: 2026-01-29
 
 // Tiered pricing for Grok 4.1 Fast models (both reasoning and non-reasoning)
 const PRICE_41 = {
@@ -36,7 +36,7 @@ const PRICE_40 = {
 // we don't add LLM_IF_OAI_Responses explicitly here, as the code fully treats XAI/XAI Models with responses
 
 const XAI_IF: ModelDescriptionSchema['interfaces'] = [
-  LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_Tools_WebSearch,
+  LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json,
 ] as const;
 
 const XAI_IF_Vision: ModelDescriptionSchema['interfaces'] = [
@@ -83,7 +83,7 @@ const _knownXAIChatModels: ManualMappings = [
     interfaces: [...XAI_IF_Vision, LLM_IF_OAI_Reasoning],
     parameterSpecs: XAI_PAR_Reasoning,
     chatPrice: PRICE_41,
-    benchmark: { cbaElo: 1483 }, // grok-4-1-fast-reasoning
+    benchmark: { cbaElo: 1430 }, // grok-4-1-fast-reasoning
   },
   {
     idPrefix: 'grok-4-1-fast-non-reasoning',
@@ -94,7 +94,7 @@ const _knownXAIChatModels: ManualMappings = [
     interfaces: XAI_IF_Vision,
     parameterSpecs: XAI_PAR,
     chatPrice: PRICE_41,
-    benchmark: { cbaElo: 1465 }, // grok-4-1-fast-non-reasoning
+    benchmark: { cbaElo: 1466 }, // grok-4.1
   },
 
   // Grok 4
@@ -108,7 +108,7 @@ const _knownXAIChatModels: ManualMappings = [
     interfaces: [...XAI_IF_Vision, LLM_IF_OAI_Reasoning],
     parameterSpecs: XAI_PAR_Reasoning,
     chatPrice: PRICE_40,
-    benchmark: { cbaElo: 1420 },
+    benchmark: { cbaElo: 1404 }, // grok-4-fast-reasoning
   },
   {
     hidden: true, // yield to 4.1
@@ -120,7 +120,6 @@ const _knownXAIChatModels: ManualMappings = [
     interfaces: XAI_IF_Vision,
     parameterSpecs: XAI_PAR,
     chatPrice: PRICE_40,
-    benchmark: { cbaElo: 1409 },
   },
   {
     idPrefix: 'grok-4-0709',
@@ -131,7 +130,7 @@ const _knownXAIChatModels: ManualMappings = [
     interfaces: [...XAI_IF_Vision, LLM_IF_OAI_Reasoning],
     parameterSpecs: XAI_PAR_Reasoning,
     chatPrice: { input: 3, output: 15, cache: { cType: 'oai-ac', read: 0.75 } },
-    benchmark: { cbaElo: 1415 + 6 }, // grok-4-0709 (+6 to stay on top of the fast)
+    benchmark: { cbaElo: 1410 }, // grok-4-0709
   },
 
   // Grok 3 (Pre-Grok 4: no server-side tools)
@@ -144,7 +143,7 @@ const _knownXAIChatModels: ManualMappings = [
     interfaces: XAI_IF_Pre4,
     parameterSpecs: XAI_PAR_Pre4,
     chatPrice: { input: 3, output: 15, cache: { cType: 'oai-ac', read: 0.75 } },
-    benchmark: { cbaElo: 1409 }, // grok-3-preview-02-24
+    benchmark: { cbaElo: 1411 }, // grok-3-preview-02-24
   },
   {
     idPrefix: 'grok-3-mini',
@@ -153,9 +152,12 @@ const _knownXAIChatModels: ManualMappings = [
     contextWindow: 131072,
     maxCompletionTokens: undefined,
     interfaces: [...XAI_IF_Pre4, LLM_IF_OAI_Reasoning],
-    parameterSpecs: XAI_PAR_Pre4,
+    parameterSpecs: [
+      { paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high'] },
+      ...XAI_PAR_Pre4,
+    ],
     chatPrice: { input: 0.3, output: 0.5, cache: { cType: 'oai-ac', read: 0.075 } },
-    benchmark: { cbaElo: 1358 }, // grok-3-mini-beta (updated from CSV)
+    benchmark: { cbaElo: 1357 }, // grok-3-mini-beta
   },
 
   // Grok Code (Pre-Grok 4: no server-side tools)
@@ -181,8 +183,7 @@ const _knownXAIChatModels: ManualMappings = [
     interfaces: XAI_IF_Pre4_Vision,
     parameterSpecs: XAI_PAR_Pre4,
     chatPrice: { input: 2, output: 10 },
-    // Fuzzy matched with "grok-2-2024-08-13" (1288) => wrong, but still we need a fallback
-    benchmark: { cbaElo: 1288 },
+    // no benchmark: keep this out
   },
 
 ] as const;

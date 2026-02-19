@@ -41,6 +41,9 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
   let processedSearchResultUrls = new Set<string>();
   // NOTE: could compute rate (tok/s) from the first textful event to the last (to ignore the prefill time)
 
+  // [OpenRouter] Provider routing info - extracted from raw JSON before Zod strips it
+  let openRouterProviderInfraSent = false;
+
   // Supporting structure to accumulate the assistant message
   const accumulator: {
     content: string | null;
@@ -87,6 +90,12 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
       // NOTE: these sort of messages have no useful data and would break the parser here
       // console.log('AIX: OpenAI-dispatch: missing-choices chunk skipped', chunkData);
       return;
+    }
+
+    // [OpenRouter] Extract provider routing info (before Zod parsing strips unknown fields)
+    if (!openRouterProviderInfraSent && typeof chunkData?.provider === 'string' && chunkData.provider) {
+      openRouterProviderInfraSent = true;
+      pt.setProviderInfraLabel(chunkData.provider);
     }
 
     const json = OpenAIWire_API_Chat_Completions.ChunkResponse_schema.parse(chunkData);
@@ -195,7 +204,7 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
       // delta: Reasoning Content [Deepseek, 2025-01-20]
       let deltaHasReasoning = false;
-      if (typeof delta.reasoning_content === 'string') {
+      if (typeof delta.reasoning_content === 'string' && (delta.reasoning_content || !delta.content)) {
 
         pt.appendReasoningText(delta.reasoning_content);
         deltaHasReasoning = true;
@@ -206,9 +215,12 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
         for (const reasoningDetail of delta.reasoning_details) {
           // Extract text from reasoning blocks based on type
-          if (reasoningDetail.type === 'reasoning.text' && typeof reasoningDetail.text === 'string') {
-            pt.appendReasoningText(reasoningDetail.text);
-            deltaHasReasoning = true;
+          if (reasoningDetail.type === 'reasoning.text') {
+            if (typeof reasoningDetail.text === 'string') {
+              pt.appendReasoningText(reasoningDetail.text);
+              deltaHasReasoning = true;
+            }
+            // else: empty reasoning chunk, e.g. "{ type: 'reasoning.text' }", skip
           }
           // Summaries can also be shown as reasoning
           else if (reasoningDetail.type === 'reasoning.summary' && typeof reasoningDetail.summary === 'string') {
@@ -406,6 +418,10 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
     if (completeData.warning)
       console.log('AIX: OpenAI-dispatch-NS warning:', completeData.warning);
 
+    // [OpenRouter] Extract provider routing info (before Zod parsing strips unknown fields)
+    if (typeof completeData?.provider === 'string' && completeData.provider)
+      pt.setProviderInfraLabel(completeData.provider);
+
     // Parse the complete response
 
     // [Fixup, 2025-11-11] Some OpenAI-compatible APIs omit the 'object' field - inject it if needed
@@ -474,8 +490,10 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
       // [OpenRouter, 2025-01-20] Handle structured reasoning_details
       if (Array.isArray(message.reasoning_details)) {
         for (const reasoningDetail of message.reasoning_details) {
-          if (reasoningDetail.type === 'reasoning.text' && typeof reasoningDetail.text === 'string') {
-            pt.appendReasoningText(reasoningDetail.text);
+          if (reasoningDetail.type === 'reasoning.text') {
+            if (typeof reasoningDetail.text === 'string')
+              pt.appendReasoningText(reasoningDetail.text);
+            // else: empty reasoning chunk, e.g. "{ type: 'reasoning.text' }", skip
           } else if (reasoningDetail.type === 'reasoning.summary' && typeof reasoningDetail.summary === 'string') {
             // pt.appendReasoningText(`[Summary] ${reasoningDetail.summary}`);
             pt.appendReasoningText(reasoningDetail.summary);
@@ -535,8 +553,8 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
       }
 
       // [OpenRouter, 2025-12-31] Extension for receiving Images (non-streaming)
-      if ((message as any).images && Array.isArray((message as any).images)) {
-        for (const imageObj of (message as any).images) {
+      if (message.images && Array.isArray(message.images)) {
+        for (const imageObj of message.images) {
           if (imageObj?.image_url?.url) {
             const imageUrl = imageObj.image_url.url;
             // Extract mime type and base64 data from data URL: "data:image/png;base64,..."
@@ -594,6 +612,7 @@ function _fromOpenAIFinishReason(finish_reason: string | null | undefined) {
     case 'end_turn': // [OpenRouter] Anthropic Claude 3.5 backend
     case 'COMPLETE': // [OpenRouter] Command R+
     case 'eos': // [OpenRouter] Phind: CodeLlama
+    case 'STOP': // [TLUS?]
       return 'ok';
 
     // [OpenAI] finished due to requesting tool+ to be called
@@ -702,7 +721,7 @@ function _forwardOpenRouterDataError(parsedData: any, pt: IParticleTransmitter) 
   const { error } = parsedData;
 
   // require .message/.code to consider this a valid error object
-  if (!(typeof error === 'object') || !('message' in error) || !('code' in error)) {
+  if (!(typeof error === 'object') || !('message' in error) /*|| !('code' in error) */) { // .code is optional for LM Studio and others
     console.log('AIX: OpenAI-dispatch ignored error:', { error });
     return false;
   }

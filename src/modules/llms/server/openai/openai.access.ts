@@ -4,8 +4,8 @@
  * This module only imports zod for schema definition and provides access logic
  * that works identically on server and client environments.
  *
- * Supports 14 OpenAI-compatible dialects: alibaba, azure, deepseek, groq, lmstudio,
- * localai, mistral, moonshot, openai, openpipe, openrouter, perplexity, togetherai, xai
+ * Supports 15 OpenAI-compatible dialects: alibaba, azure, deepseek, groq, lmstudio,
+ * localai, mistral, moonshot, openai, openpipe, openrouter, perplexity, togetherai, xai, zai
  */
 
 import * as z from 'zod/v4';
@@ -33,6 +33,7 @@ const DEFAULT_OPENROUTER_HOST = 'https://openrouter.ai/api';
 const DEFAULT_PERPLEXITY_HOST = 'https://api.perplexity.ai';
 const DEFAULT_TOGETHERAI_HOST = 'https://api.together.xyz';
 const DEFAULT_XAI_HOST = 'https://api.x.ai';
+const DEFAULT_ZAI_HOST = 'https://api.z.ai/api/paas';
 
 
 // -- Centralized OpenAI-compatible API Paths --
@@ -71,6 +72,22 @@ export function llmsFixupHost(host: string, apiPath: string): string {
   return host;
 }
 
+/**
+ * Safely check if a host URL's hostname matches the expected hostname.
+ * This prevents DNS spoofing attacks where malicious hosts like "api.openai.com.evil.com"
+ * would pass simple string `.includes()` checks.
+ */
+export function llmsHostnameMatches(hostUrl: string | undefined, expectedHostname: string): boolean {
+  if (!hostUrl)
+    return false;
+  try {
+    const url = new URL(hostUrl.startsWith('http') ? hostUrl : `https://${hostUrl}`);
+    return url.hostname === expectedHostname;
+  } catch {
+    return false;
+  }
+}
+
 /** Select a random key from a comma-separated list of API keys, used to load balance. */
 export function llmsRandomKeyFromMultiKey(multiKeyString: string): string {
   if (!multiKeyString.includes(','))
@@ -96,7 +113,7 @@ export const openAIAccessSchema = z.object({
   dialect: z.enum([
     'alibaba', 'azure', 'deepseek', 'groq', 'lmstudio',
     'localai', 'mistral', 'moonshot', 'openai', 'openpipe',
-    'openrouter', 'perplexity', 'togetherai', 'xai',
+    'openrouter', 'perplexity', 'togetherai', 'xai', 'zai',
   ]),
   clientSideFetch: z.boolean().optional(), // optional: backward compatibility from newer server version - can remove once all clients are updated
   oaiKey: z.string().trim(),
@@ -104,8 +121,8 @@ export const openAIAccessSchema = z.object({
   oaiHost: z.string().trim(),
   heliKey: z.string().trim(),
 
-  // deprecated: accepted for backward compatibility with older clients/stored data, ignored by server
-  moderationCheck: z.boolean().optional(), // TODO: remove post releasing 2.0.4
+  // [OpenRouter only] Debug/routing service-level settings
+  orRequireParameters: z.boolean().optional(), // Only route to providers supporting all request params
 });
 
 export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | null, apiPath: string): { headers: HeadersInit, url: string } {
@@ -229,33 +246,51 @@ export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | nu
         url: moonshotHost + apiPath,
       };
 
-    case 'openai':
-      const oaiKey = access.oaiKey || env.OPENAI_API_KEY || '';
-      const oaiOrg = access.oaiOrg || env.OPENAI_API_ORG_ID || '';
-      let oaiHost = llmsFixupHost(access.oaiHost || env.OPENAI_API_HOST || DEFAULT_OPENAI_HOST, apiPath);
-      // warn if no key - only for default (non-overridden) hosts
-      if (!oaiKey && oaiHost.indexOf(DEFAULT_OPENAI_HOST) !== -1)
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing OpenAI API Key. Add it on the UI or server side (your deployment).' });
+    case 'openai': {
 
-      // [Helicone]
-      // We don't change the host (as we do on Anthropic's), as we expect the user to have a custom host.
-      let heliKey = access.heliKey || env.HELICONE_API_KEY || false;
-      if (heliKey) {
-        if (oaiHost.includes(DEFAULT_OPENAI_HOST)) {
-          oaiHost = `https://${DEFAULT_HELICONE_OPENAI_HOST}`;
-        } else if (!oaiHost.includes(DEFAULT_HELICONE_OPENAI_HOST)) {
-          // throw new Error(`The Helicone OpenAI Key has been provided, but the host is not set to https://${DEFAULT_HELICONE_OPENAI_HOST}. Please fix it in the Models Setup page.`);
-          heliKey = false;
-        }
+      // Credential resolution: client-dominated
+      // - if the client provides a host, they own the whole request - no server
+      // - credentials (API key, org, Helicone key) are sent to client-chosen endpoints
+      // - if the client doesn't set a host, they can still override the key (own billing).
+      let oaiKey: string;
+      let oaiHost: string;
+      let oaiOrg: string;
+      let heliKey: string | false;
+      if (access.oaiHost) {
+        // Client controls the endpoint: only client credentials
+        oaiKey = access.oaiKey || '';
+        oaiHost = access.oaiHost;
+        oaiOrg = access.oaiOrg || '';
+        heliKey = access.heliKey || false;
+      } else {
+        // Client hasn't touched the endpoint: server infrastructure
+        oaiKey = access.oaiKey || env.OPENAI_API_KEY || '';
+        oaiHost = /* NO access.oaiHost */ env.OPENAI_API_HOST || DEFAULT_OPENAI_HOST;
+        oaiOrg = access.oaiOrg || env.OPENAI_API_ORG_ID || '';
+        heliKey = access.heliKey || env.HELICONE_API_KEY || false;
       }
 
-      // [Cloudflare OpenAI AI Gateway support]
-      // Adapts the API path when using a 'universal' or 'openai' Cloudflare AI Gateway endpoint in the "API Host" field
-      if (oaiHost.includes('https://gateway.ai.cloudflare.com')) {
+      oaiHost = llmsFixupHost(oaiHost, apiPath);
+
+      // Require a key when targeting the default OpenAI host
+      if (!oaiKey && llmsHostnameMatches(oaiHost, DEFAULT_OPENAI_HOST))
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing OpenAI API Key. Add it on the UI or server side (your deployment).' });
+
+      // [Helicone] proxy: redirect default OpenAI host to Helicone when key present;
+      // if host is already Helicone keep it; for any other host, disable the Helicone key
+      if (heliKey) {
+        if (llmsHostnameMatches(oaiHost, DEFAULT_OPENAI_HOST))
+          oaiHost = `https://${DEFAULT_HELICONE_OPENAI_HOST}`;
+        else if (!llmsHostnameMatches(oaiHost, DEFAULT_HELICONE_OPENAI_HOST))
+          heliKey = false;
+      }
+
+      // [Cloudflare AI Gateway] proxy: adapt API paths for Cloudflare's routing
+      if (llmsHostnameMatches(oaiHost, 'gateway.ai.cloudflare.com')) {
         const parsedUrl = new URL(oaiHost);
         const pathSegments = parsedUrl.pathname.split('/').filter(segment => segment.length > 0);
 
-        // The expected path should be: /v1/<ACCOUNT_TAG>/<GATEWAY_URL_SLUG>/<PROVIDER_ENDPOINT>
+        // Expected: /v1/<ACCOUNT_TAG>/<GATEWAY_URL_SLUG>/<PROVIDER_ENDPOINT>
         if (pathSegments.length < 3 || pathSegments.length > 4 || pathSegments[0] !== 'v1')
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cloudflare AI Gateway API Host is not valid. Please check the API Host field in the Models Setup page.' });
 
@@ -279,6 +314,7 @@ export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | nu
         },
         url: oaiHost + apiPath,
       };
+    }
 
     case 'openpipe':
       const openPipeKey = access.oaiKey || env.OPENPIPE_API_KEY || '';
@@ -371,6 +407,24 @@ export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | nu
           'Authorization': `Bearer ${xaiKey}`,
         },
         url: DEFAULT_XAI_HOST + apiPath,
+      };
+
+    case 'zai':
+      // Z.ai uses /paas/v4/ instead of standard /v1/, the HOST contains up to /api/paas, then we remap /v1 -> /v4
+      let zaiKey = access.oaiKey || '';
+      const zaiHost = llmsFixupHost(access.oaiHost || DEFAULT_ZAI_HOST, apiPath);
+      const zaiPath = apiPath.replace('/v1', '/v4');
+
+      zaiKey = llmsRandomKeyFromMultiKey(zaiKey);
+      if (!zaiKey || !zaiHost)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing Z.ai API Key or Host. Add it on the UI (Models Setup) or server side (your deployment).' });
+
+      return {
+        headers: {
+          'Authorization': `Bearer ${zaiKey}`,
+          'Content-Type': 'application/json',
+        },
+        url: zaiHost + zaiPath,
       };
 
   }

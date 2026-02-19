@@ -56,6 +56,7 @@ class ResponseParserStateMachine {
 
   // low-level verifications
   #sequenceNumber: number = 0;
+  #sequenceNumberActive: boolean = false; // tracks if sequence_number validation is active
   #expectedEvents: TEventType[] | undefined;
 
   // most recently updated response object
@@ -77,11 +78,27 @@ class ResponseParserStateMachine {
 
   // Validations
 
-  validateSequenceNumber(sequenceNumber: number) {
+  validateSequenceNumber(sequenceNumber: number | undefined) {
     // time-to-first-event
     if (this.timeToFirstEvent === undefined)
       this.timeToFirstEvent = Date.now() - this.parserCreationTimestamp;
 
+    // [LiteLLM, 2026-01-29] Handle optional sequence_number for proxy compatibility
+    // Once we see a valid sequence_number, we activate validation and require monotonicity
+    if (sequenceNumber === undefined) {
+      // If validation was previously active, warn about missing sequence number
+      if (this.#sequenceNumberActive)
+        console.warn(`[DEV] AIX: OpenAI Responses: sequence_number missing after previously seeing valid numbers`);
+      return;
+    }
+
+    // First valid sequence_number activates validation
+    if (!this.#sequenceNumberActive) {
+      this.#sequenceNumberActive = true;
+      this.#sequenceNumber = sequenceNumber;
+    }
+
+    // Validate monotonicity
     if (sequenceNumber !== this.#sequenceNumber)
       console.warn(`[DEV] AIX: OpenAI Responses: sequence mismatch: got ${sequenceNumber}, expected ${this.#sequenceNumber}`);
     this.#sequenceNumber = sequenceNumber + 1;
@@ -306,6 +323,9 @@ export function createOpenAIResponsesEventParser(): ChatGenerateParseFunction {
           if (metrics)
             pt.updateMetrics(metrics);
         }
+
+        // -> End of the response
+        pt.setDialectEnded('done-dialect'); // OpenAI Responses: 'response.completed'
         break;
 
       case 'response.failed':
@@ -1015,7 +1035,15 @@ function _forwardTextAnnotation(pt: IParticleTransmitter, annotation: Exclude<Ex
  * - citations: High-quality links (2-3) via annotations in message content
  */
 function _forwardWebSearchCallItem(pt: IParticleTransmitter, webSearchCall: Extract<OpenAIWire_API_Responses.Response['output'][number], { type: 'web_search_call' }>): void {
-  const { action } = webSearchCall;
+  const { action, status } = webSearchCall;
+
+  // Handle failed web search (e.g., xAI returns status: 'failed' when web search fails)
+  if (status === 'failed') {
+    const failedUrl = action?.type === 'open_page' ? action.url : undefined;
+    pt.sendVoidPlaceholder('search-web', failedUrl ? `Failed to access ${sanitizeUrlForDisplay(failedUrl)}` : 'Web search failed');
+    return;
+  }
+
   switch (action?.type) {
     case 'search':
       if (action.query && action.sources && Array.isArray(action.sources)) {
