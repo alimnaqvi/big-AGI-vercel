@@ -226,6 +226,13 @@ export const DModelParameterRegistry = {
     // undefined means model default
   },
 
+  llmVndAntWebDynamic: { // applies to both web search and web fetch when enabled
+    label: 'Dynamic Filtering',
+    type: 'boolean',
+    description: 'Use dynamic filtering for search/fetch - more accurate, reduces tokens (Opus/Sonnet 4.6+, not ZDR-eligible)',
+    // undefined means false (standard versions)
+  },
+
   llmVndAntWebFetch: _enumDef({ // implies: LLM_IF_Tools_WebSearch
     label: 'Web Fetch',
     type: 'enum',
@@ -234,6 +241,14 @@ export const DModelParameterRegistry = {
     // undefined means off (same as 'off')
   }),
 
+  llmVndAntWebFetchMaxUses: {
+    label: 'Web Fetch Max Uses',
+    type: 'integer',
+    description: 'Maximum number of web page fetches per response',
+    range: [1, 50],
+    // undefined means default
+  },
+
   llmVndAntWebSearch: _enumDef({ // implies: LLM_IF_Tools_WebSearch
     label: 'Web Search',
     type: 'enum',
@@ -241,6 +256,14 @@ export const DModelParameterRegistry = {
     values: ['auto', 'off'],
     // undefined means off (same as 'off')
   }),
+
+  llmVndAntWebSearchMaxUses: {
+    label: 'Web Search Max Uses',
+    type: 'integer',
+    description: 'Maximum number of web searches per response',
+    range: [1, 50],
+    // undefined means default
+  },
 
   // llmVndAntToolSearch: { // Not user set
   //   label: 'Tool Search',
@@ -517,7 +540,7 @@ export type DModelParameterSpecAny = {
  * Note: This is the client-side TypeScript definition that matches
  * ModelParameterSpec_schema in `llm.server.types.ts`.
  */
-interface DModelParameterSpec<T extends DModelParameterId> {
+export interface DModelParameterSpec<T extends DModelParameterId> {
   paramId: T;
   required?: boolean;
   hidden?: boolean;
@@ -533,7 +556,7 @@ interface DModelParameterSpec<T extends DModelParameterId> {
    * The UI will only show these values. Analogous to rangeOverride for numeric params.
    * Example: llmVndOaiEffort registry has 6 values, but a specific model may only support ['low', 'medium', 'high'].
    */
-  enumValues?: readonly string[];
+  enumValues?: readonly DModelParameterValue<T>[];
 }
 
 

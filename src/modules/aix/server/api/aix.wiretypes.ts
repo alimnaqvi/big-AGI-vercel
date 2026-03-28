@@ -179,7 +179,7 @@ export namespace AixWire_Parts {
 
   const _FunctionCallInvocation_schema = z.object({
     type: z.literal('function_call'),
-    name: z.string(),
+    name: z.string(), // function name
     args: z.string(), //.nullable(), // 2024-11-03: disabled .nullable(), as we'll use '' for no args (which some APIs weirdly don't support so we'll mock downstream as '{}')
     // _description: z.string().optional(),
     // _args_schema: z.object({}).optional(),
@@ -206,7 +206,12 @@ export namespace AixWire_Parts {
   const _FunctionCallResponse_schema = z.object({
     type: z.literal('function_call'),
     result: z.string(),
-    _name: z.string().optional(),
+    /**
+     * Function name of the response
+     * - for Gemini this must match the _FunctionCallDeclaration.name
+     * - other APIs usually match the id (of the parent ToolResponsePart) to the ID of the call
+     */
+    name: z.string(),
   });
 
   const _CodeExecutionResponse_schema = z.object({
@@ -314,7 +319,7 @@ export namespace AixWire_Tooling {
 
   /// Function Call Tool Definition
 
-  const _FunctionCall_schema = z.object({
+  const _FunctionCallDeclaration_schema = z.object({
     /**
      * The name of the function to call. Up to 64 characters long, and can only contain letters, numbers, underscores, and hyphens.
      */
@@ -349,7 +354,7 @@ export namespace AixWire_Tooling {
 
   const _FunctionCallTool_schema = z.object({
     type: z.literal('function_call'),
-    function_call: _FunctionCall_schema,
+    function_call: _FunctionCallDeclaration_schema,
     // domain: z.enum(['server', 'client']).optional(),
   });
 
@@ -481,8 +486,11 @@ export namespace AixWire_API {
     vndAntSkills: z.string().optional(),
     vndAntThinkingBudget: z.number().or(z.literal('adaptive')).nullable().optional(),
     vndAntToolSearch: z.enum(['regex', 'bm25']).optional(), // Tool Search Tool variant
+    vndAntWebDynamic: z.boolean().optional(),
     vndAntWebFetch: z.enum(['auto']).optional(),
+    vndAntWebFetchMaxUses: z.number().int().min(1).max(50).optional(),
     vndAntWebSearch: z.enum(['auto']).optional(),
+    vndAntWebSearchMaxUses: z.number().int().min(1).max(50).optional(),
 
     // Bedrock
     vndBedrockAPI: z.enum(['converse', 'invoke-anthropic', 'mantle']).optional(),
@@ -661,7 +669,8 @@ export namespace AixWire_Particles {
   // | { cg: 'start' } // not really used for now
     | { cg: 'end', terminationReason: CGEndReason /* we know why we're sending 'end' */, tokenStopReason?: GCTokenStopReason /* we may or not have gotten a logical token stop reason from the dispatch */ }
     | { cg: 'issue', issueId: CGIssueId, issueText: string }
-    | { cg: 'retry-reset', rScope: 'srv-dispatch' | 'srv-op' | 'cli-ll', rShallClear: boolean, reason: string, attempt: number, maxAttempts: number, delayMs: number, causeHttp?: number, causeConn?: string }
+    | { cg: 'aix-info', ait: 'flow-cont', text: string }
+    | { cg: 'aix-retry-reset', rScope: 'srv-dispatch' | 'srv-op' | 'cli-ll', rShallClear: boolean, reason: string, attempt: number, maxAttempts: number, delayMs: number, causeHttp?: number, causeConn?: string }
     | { cg: 'set-metrics', metrics: CGSelectMetrics }
     | { cg: 'set-model', name: string }
     | { cg: 'set-provider-infra', label: string }
@@ -741,9 +750,15 @@ export namespace AixWire_Particles {
     | { p: 'cei', id: string, language: string, code: string, author: 'gemini_auto_inline' | 'code_interpreter' }
     | { p: 'cer', id: string, error: DMessageToolResponsePart['error'], result: string, executor: 'gemini_auto_inline' | 'code_interpreter', environment: DMessageToolResponsePart['environment'] }
     | { p: 'ia', mimeType: string, a_b64: string, label?: string, generator?: string, durationMs?: number } // inline audio, complete
-    | { p: 'ii', mimeType: string, i_b64: string, label?: string, generator?: string, prompt?: string } // inline image, complete
+    | { p: 'ii', mimeType: string, i_b64: string, label?: string, generator?: string, prompt?: string, hintSkipResize?: boolean } // inline image, complete
+    /**
+     * Model Operation - tracks instant model's operation(s) state, primarily for hosted tools.
+     * - state is 'active' unless specified otherwise, 'error' is done too
+     * - shall be called 'mos' but for legacy/compatibility it's still 'vp' (backwards comp to simple void placeholder particles)
+     */
+    | { p: /*'mo'*/ 'vp', opId: string, text: string, mot: 'search-web' | 'gen-image' | 'code-exec', state?: 'done' | 'error', parentOpId?: string, iTexts?: string[], oTexts?: string[] }
     | { p: 'urlc', title: string, url: string, num?: number, from?: number, to?: number, text?: string, pubTs?: number } // url citation - pubTs: publication timestamp
     | { p: 'svs', vendor: string, state: Record<string, unknown> } // set vendor state - applies to the last emitted part (opaque protocol state)
-    | { p: 'vp', text: string, mot: 'search-web' | 'gen-image' | 'code-exec' }; // void placeholder - temporary status text that gets wiped when real content arrives
+    ;
 
 }

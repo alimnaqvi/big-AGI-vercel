@@ -59,7 +59,6 @@ export function ContentFragments(props: {
   messageGeneratorLlmId?: string | null,
   optiAllowSubBlocksMemo?: boolean,
   disableMarkdownText: boolean,
-  enhanceCodeBlocks: boolean,
   showUnsafeHtmlCode?: boolean,
 
   textEditsState: ChatMessageTextPartEditState | null,
@@ -87,6 +86,7 @@ export function ContentFragments(props: {
   // solo placeholder - dataStreamViz trigger
   const showDataStreamViz =
     !Release.Features.LIGHTER_ANIMATIONS
+    && !!props.messagePendingIncomplete // if generating
     && props.uiComplexityMode !== 'minimal'
     && props.contentFragments.length === 1
     // && props.noVoidFragments // not needed, we have all the interleaved fragments here
@@ -167,14 +167,13 @@ export function ContentFragments(props: {
             return (
               <BlockPartPlaceholder
                 key={fId}
-                placeholderText={part.pText}
-                placeholderType={part.pType}
-                placeholderModelOp={part.modelOp}
-                placeholderAixControl={part.aixControl}
-                messageRole={props.messageRole}
+                fragmentId={fId}
+                placeholderPart={part}
                 contentScaling={props.contentScaling}
-                showAsItalic
+                messagePendingIncomplete={!!props.messagePendingIncomplete}
                 showAsDataStreamViz={showDataStreamViz}
+                zenMode={props.uiComplexityMode === 'minimal'}
+                onFragmentDelete={props.messagePendingIncomplete ? undefined : props.onFragmentDelete}
               />
             );
 
@@ -333,7 +332,6 @@ export function ContentFragments(props: {
               fitScreen={props.fitScreen}
               isMobile={props.isMobile}
               disableMarkdownText={props.disableMarkdownText}
-              enhanceCodeBlocks={props.enhanceCodeBlocks}
               // renderWordsDiff={wordsDiff || undefined}
               showUnsafeHtmlCode={props.showUnsafeHtmlCode}
               optiAllowSubBlocksMemo={!!props.optiAllowSubBlocksMemo}
