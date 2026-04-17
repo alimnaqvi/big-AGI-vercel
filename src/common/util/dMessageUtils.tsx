@@ -70,7 +70,7 @@ const tooltipCreationTimeSx: SxProps = {
   color: 'text.tertiary',
 };
 
-const tooltipMetricsGridSx: SxProps = {
+export const tooltipMetricsGridSx: SxProps = {
   // grid of 2 columns, the first fits the labels, the other expends with the values
   display: 'grid',
   gridTemplateColumns: 'auto 1fr',
@@ -205,7 +205,7 @@ export function useMessageAvatarLabel(
 
   // OPTIMIZATION - THIS COULD BACKFIRE - THE ICON MAY NOT BE UPDATED AS OFTEN AS WE NEED
   // -> we will only trigger updates on: updated, pendingIncomplete changes, name changes
-  // generator will change at every step (due to some structuredClone in AIX); we choose to 'lag' behind it and
+  // generator ref changes during streaming (new ref per update); we 'lag' behind it and
   // refresh this when other variables change
   const laggedGeneratorRef = React.useRef<DMessageGenerator | undefined>(undefined);
   laggedGeneratorRef.current = generator;
@@ -249,8 +249,8 @@ export function useMessageAvatarLabel(
     const modelId = generator.aix?.mId ?? null;
     const vendorId = generator.aix?.vId ?? null;
     const VendorIcon = (vendorId && complexity !== 'minimal') ? llmsGetVendorIcon(vendorId) : null;
-    const metrics = generator.metrics ? _prettyMetrics(generator.metrics, complexity) : null;
-    const stopReason = generator.tokenStopReason ? _prettyTokenStopReason(generator.tokenStopReason, complexity) : null;
+    const metrics = generator.metrics ? prettyMessageMetrics(generator.metrics, complexity) : null;
+    const stopReason = generator.tokenStopReason ? prettyTokenStopReason(generator.tokenStopReason, complexity) : null;
 
     // aix tooltip: more details
     return {
@@ -269,7 +269,8 @@ export function useMessageAvatarLabel(
   }, [complexity, created, generatorName, pendingIncomplete, updated]);
 }
 
-function _prettyMetrics(metrics: DMessageGenerator['metrics'], uiComplexityMode: UIComplexityMode): React.ReactNode {
+/** Renders chat generation metrics as a grid. Exported for reuse in message info popup. */
+export function prettyMessageMetrics(metrics: DMessageGenerator['metrics'], uiComplexityMode: UIComplexityMode): React.ReactNode {
   if (!metrics) return null;
 
   const showWaitingTime = metrics?.dtStart !== undefined && (uiComplexityMode === 'extra' || metrics.dtStart >= 10000);
@@ -344,7 +345,7 @@ function _prettyCostCode(code: MetricsChatGenerateCost_Md['$code']): string | nu
   }
 }
 
-function _prettyTokenStopReason(reason: DMessageGenerator['tokenStopReason'], complexity: UIComplexityMode): string | null {
+export function prettyTokenStopReason(reason: DMessageGenerator['tokenStopReason'], complexity: UIComplexityMode): string | null {
   if (!reason) return null;
   switch (reason) {
     case 'client-abort':
@@ -519,34 +520,15 @@ export function prettyShortChatModelName(model: string | undefined): string {
 }
 
 function _prettyAnthropicModelName(modelId: string): string | null {
-  if (modelId.indexOf('claude-') === -1) return null; // not a Claude model
+  if (!modelId.includes('claude-')) return null;
 
-  // must match any known prefix
-  let claudeIndex = -1;
-  const claudePrefixes = ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4', 'claude-3', 'claude-2'];
-  for (const prefix of claudePrefixes) {
-    const index = modelId.indexOf(prefix);
-    if (index !== -1) {
-      claudeIndex = index;
-      break;
-    }
-  }
+  // extract version as N.M (e.g. `-4-7` -> 4.7, `-4-` -> 4); (?!\d) guards against date digits
+  const m = modelId.match(/-(\d)(?:-(\d)(?!\d))?/);
+  const version = m ? (m[2] ? `${m[1]}.${m[2]}` : m[1]) : '?';
 
-  const subStr = modelId.slice(claudeIndex);
-  const version =
-    subStr.includes('-4-6') ? '4.6'
-      : subStr.includes('-4-5') ? '4.5' // fixes the -5
-        : subStr.includes('-3-5') ? '3.5' // fixes the -5
-          : subStr.includes('-5') ? '5'
-            : subStr.includes('-4-1') ? '4.1'
-              : subStr.includes('-4') ? '4'
-                : subStr.includes('-3-7') ? '3.7'
-                  : subStr.includes('-3') ? '3'
-                    : '?';
-
-  if (subStr.includes(`-opus`)) return `Claude Opus ${version}`;
-  if (subStr.includes(`-sonnet`)) return `Claude Sonnet ${version}`;
-  if (subStr.includes(`-haiku`)) return `Claude Haiku ${version}`;
+  if (modelId.includes('-opus')) return `Claude Opus ${version}`;
+  if (modelId.includes('-sonnet')) return `Claude Sonnet ${version}`;
+  if (modelId.includes('-haiku')) return `Claude Haiku ${version}`;
 
   return `Claude ${version}`;
 }

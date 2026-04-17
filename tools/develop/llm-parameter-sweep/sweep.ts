@@ -104,7 +104,7 @@ const SWEEP_DEFINITIONS = [
     description: 'Anthropic output_config.effort values',
     applicability: { type: 'dialects', dialects: ['anthropic'] },
     applyToModel: (value) => ({ reasoningEffort: value }),
-    values: ['low', 'medium', 'high', 'max'] satisfies AixAPI_Model['reasoningEffort'][],
+    values: ['low', 'medium', 'high', 'xhigh', 'max'] satisfies AixAPI_Model['reasoningEffort'][],
     mode: 'enumerate',
   }),
 
@@ -324,6 +324,7 @@ class SweepCollectorTransmitter implements IParticleTransmitter {
   appendAutoText_weak(textChunk: string): void { this.text += textChunk; }
   appendAudioInline(_mimeType: string, _base64Data: string, _label: string, _generator: string, _durationMs: number): void { /* no-op */ }
   appendImageInline(_mimeType: string, _base64Data: string, _label: string, _generator: string, _prompt: string): void { /* no-op */ }
+  appendHostedResource(_hres: any): void { /* no-op */ }
   startFunctionCallInvocation(_id: string | null, _functionName: string, _expectedArgsFmt: 'incr_str' | 'json_object', _args: string | object | null): void { /* no-op */ }
   appendFunctionCallInvocationArgs(_id: string | null, _argsJsonChunk: string): void { /* no-op */ }
   addCodeExecutionInvocation(_id: string | null, _language: string, _code: string, _author: 'gemini_auto_inline' | 'code_interpreter'): void { /* no-op */ }
@@ -333,7 +334,7 @@ class SweepCollectorTransmitter implements IParticleTransmitter {
   // Special
   sendCGControl(_cgCOp: AixWire_Particles.ChatControlOp, _flushQueue?: boolean): void { /* no-op */ }
   sendOperationState(_mot: 'search-web' | 'gen-image' | 'code-exec', _text: string, _opts?: any): void { /* no-op */ }
-  sendSetVendorState(_vendor: string, _state: unknown): void { /* no-op */ }
+  sendSetVendorState(_svs: any): void { /* no-op */ }
 
   // Non-parts data
   setModelName(_modelName: string): void { /* no-op */ }
@@ -503,7 +504,7 @@ async function testParameterValue(
 
     // Check tokenStopReason for non-ok outcomes
     const stopReason = collector.tokenStopReason;
-    const isValidStop = !stopReason || stopReason === 'ok' || stopReason === 'ok-tool_invocations' || stopReason === 'ok-pause_continue';
+    const isValidStop = !stopReason || stopReason === 'ok' || stopReason === 'ok-tool_invocations';
     const isTruncated = stopReason === 'out-of-tokens';
 
     const preview = collector.hasText

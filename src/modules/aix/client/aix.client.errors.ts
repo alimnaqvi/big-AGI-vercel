@@ -45,10 +45,21 @@ export function aixClassifyStreamingError(error: any, isUserAbort: boolean, hasF
   if (error instanceof Error && error.message === 'Stream closed')
     return { errorType: 'net-disconnected', errorMessage: 'An unexpected issue occurred: **connection terminated**.' /* DO NOT CHANGE '**connection terminated**' - usually server (Vercel) side broken */ };
 
+  // Undici (Node/Edge/Electron fetch) mid-stream TLS or socket drop - surfaces on any node-backed path (CSF, Electron, SSR).
+  // Distinct from 'Stream closed' (tRPC wrapper): this one typically means the upstream LLM provider closed the TLS socket mid-stream, not the Vercel edge.
+  if (error instanceof TypeError && error.message === 'terminated')
+    return { errorType: 'net-disconnected', errorMessage: 'The AI provider interrupted mid-stream: **upstream dropped**.' /* DO NOT CHANGE '**upstream dropped**' - matched in BlockPartError */ };
+
 
   // tRPC-level protocol errors (wrapped by tRPC client)
   // Initial connection failures, HTTP errors, or text responses that blow up tRPC's JSON parser
   if (error instanceof TRPCClientError) {
+
+    // Server-side PAYLOAD_TOO_LARGE - HTTP 413
+    if (error.data?.httpStatus === 413) {
+      console.log('ee',{error: structuredClone(error)});
+      return { errorType: 'request-exceeded', errorMessage: '**Request too large**: This request exceed the size limit of the servers' };}
+
     switch (error.cause?.message) {
       /**
        * When network is disconnected while a request hasn't started (is queued by the browser).
@@ -58,7 +69,7 @@ export function aixClassifyStreamingError(error: any, isUserAbort: boolean, hasF
         return { errorType: 'net-disconnected', errorMessage: 'An issue occurred: **network error**' };
 
       /**
-       * The body of the response was "Request Entity Too Large".
+       * The body of the response was "Request Entity Too Large" (Vercel edge limit ~4.5MB).
        * - this caused trpc, in ...stream/jsonl.ts, function createConsumerStream, to throw an error due to parsing the line as JSON
        *   - "const head = JSON.parse(line);"
        * - as the error bubbles up to here, and cannot be handled by the superjson transformer either, which happens after this

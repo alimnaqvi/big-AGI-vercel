@@ -14,8 +14,9 @@ import type { ChatMessageTextPartEditState } from '../ChatMessage';
 import { BlockEdit_TextFragment } from './BlockEdit_TextFragment';
 import { BlockOpEmpty } from './BlockOpEmpty';
 import { BlockPartError } from './BlockPartError';
+import { BlockPartHostedResource } from './BlockPartHostedResource';
 import { BlockPartImageRef } from './BlockPartImageRef';
-import { BlockPartModelAux } from '../fragments-void/BlockPartModelAux';
+import { BlockPartModelAux, BlockPartModelAuxMemo } from '../fragments-void/BlockPartModelAux';
 import { BlockPartPlaceholder } from '../fragments-void/BlockPartPlaceholder';
 import { BlockPartText_AutoBlocks } from './BlockPartText_AutoBlocks';
 import { BlockPartToolInvocation } from './BlockPartToolInvocation';
@@ -134,6 +135,8 @@ export function ContentFragments(props: {
 
       // simplify
       const { fId, ft } = fragment;
+      const isLastFragment = fragmentIndex === props.contentFragments.length - 1;
+      const optimizeMemoBeforeLastBlock = props.optiAllowSubBlocksMemo === true && !isLastFragment;
 
       // VOID FRAGMENTS (reasoning, placeholders - interleaved with content)
       if (ft === 'void') {
@@ -146,8 +149,9 @@ export function ContentFragments(props: {
           //   return null;
 
           case 'ma':
+            const BlockPartModelAuxMemoOrNot = optimizeMemoBeforeLastBlock ? BlockPartModelAuxMemo : BlockPartModelAux;
             return (
-              <BlockPartModelAux
+              <BlockPartModelAuxMemoOrNot
                 key={fId}
                 fragmentId={fId}
                 auxType={part.aType}
@@ -157,7 +161,7 @@ export function ContentFragments(props: {
                 messagePendingIncomplete={!!props.messagePendingIncomplete}
                 zenMode={props.uiComplexityMode === 'minimal'}
                 contentScaling={props.contentScaling}
-                isLastFragment={fragmentIndex === props.contentFragments.length - 1}
+                isLastFragment={isLastFragment}
                 onFragmentDelete={props.onFragmentDelete}
                 onFragmentReplace={props.onFragmentReplace}
               />
@@ -357,6 +361,19 @@ export function ContentFragments(props: {
               toolResponsePart={part}
               contentScaling={props.contentScaling}
               onDoubleClick={props.onDoubleClick}
+            />
+          );
+
+        case 'hosted_resource':
+          return (
+            <BlockPartHostedResource
+              key={fId}
+              hostedResourcePart={part}
+              fragmentId={fId}
+              messageGeneratorLlmId={props.messageGeneratorLlmId}
+              contentScaling={props.contentScaling}
+              onFragmentDelete={props.onFragmentDelete}
+              onFragmentReplace={props.onFragmentReplace}
             />
           );
 

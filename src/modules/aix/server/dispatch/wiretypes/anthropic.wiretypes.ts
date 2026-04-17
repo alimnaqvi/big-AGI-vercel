@@ -274,7 +274,11 @@ export namespace AnthropicWire_Blocks {
     input: z.union([
       z.object({ query: z.string() }), // web_search
       z.object({ url: z.string() }), // web_fetch
-      z.object({ code: z.string() }), // code_execution, bash_code_execution, text_editor_code_execution
+      z.object({ code: z.string() }), // code_execution
+      z.object({ command: z.string() }), // bash_code_execution
+      z.object({ command: z.string(), path: z.string() }), // text_editor_code_execution (+ file_text, old_str, new_str, view_range, etc.)
+      z.object({ pattern: z.string() }), // tool_search_tool_regex
+      z.object({ query: z.string() }), // tool_search_tool_bm25
     ]).or(z.any()), // see the comment on ToolUseBlock_schema.input
     caller: _ToolUseCaller_schema.optional(),
   });
@@ -337,6 +341,7 @@ export namespace AnthropicWire_Blocks {
         stderr: z.string(),
         return_code: z.number(),
         content: z.array(_CodeExecutionOutputBlock_schema),
+        // abort_reason: z.string().nullish(), // seen as null in responses, but undocumented - revisit if non-null values appear
       }),
       // Encrypted variant - used when code execution is combined with programmatic tool calling + web_search
       z.object({
@@ -345,6 +350,7 @@ export namespace AnthropicWire_Blocks {
         stderr: z.string(),
         return_code: z.number(),
         content: z.array(_CodeExecutionOutputBlock_schema),
+        // abort_reason: z.string().nullish(), // seen as null in responses, but undocumented - revisit if non-null values appear
       }),
       z.object({
         type: z.literal('code_execution_tool_result_error'),
@@ -957,7 +963,7 @@ export namespace AnthropicWire_API_Message_Create {
      * - format: [Anthropic, 2026-01-29 GA] JSON schema constraint on output. Replaces deprecated top-level `output_format`.
      */
     output_config: z.object({
-      effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+      effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(), // 'xhigh' added for Opus 4.7 (2026-04-16)
       format: z.object({
         type: z.literal('json_schema'),
         schema: z.any(), // JSON Schema object - validated by Anthropic

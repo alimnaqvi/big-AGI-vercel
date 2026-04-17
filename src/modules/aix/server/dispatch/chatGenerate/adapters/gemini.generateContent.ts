@@ -252,6 +252,7 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
 
   // [NO-CIRCULATION] can't combine hosted + custom tools with restrictive policies - custom wins -> wipe hosted if any
   const hasUserRestrictivePolicy = chatGenerate.toolsPolicy?.type === 'any' || chatGenerate.toolsPolicy?.type === 'function_call';
+  // NOTE: we may have to remove the 'hasUserRestrictivePolicy' as some models seem to not want any other tool when user tools are set
   if (_addedHostedTools && hasUserTools && !hasToolContextCirculation && hasUserRestrictivePolicy) {
     _addedHostedTools = false;
     payload.tools = undefined; // wipe
@@ -301,8 +302,9 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresS
   //   chatSequence = chatSequence.filter(message => message.parts.length > 0);
 
 
-  return chatSequence.map(message => {
-    const parts: GeminiWire_ContentParts.ContentPart[] = [];
+  return chatSequence.reduce<GeminiWire_Messages.Content[]>((contents, message) => {
+    const isModelMessage = message.role === 'model';
+    const baseRole: GeminiWire_Messages.Content['role'] = isModelMessage ? 'model' : 'user';
 
     if (hotFixImagePartsFirst) {
       // https://ai.google.dev/gemini-api/docs/image-understanding#tips-best-practices
@@ -314,6 +316,19 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresS
       });
     }
 
+    // Gemini requires tool_response (FunctionResponse/CodeExecutionResult) in 'user' Content,
+    // but tool_invocation (FunctionCall/ExecutableCode) in 'model' Content. For model messages
+    // that contain both (multi-turn tool loop), we emit separate Content objects at each role
+    // boundary to preserve part ordering and thought signature positional context.
+    let currentRole: GeminiWire_Messages.Content['role'] = baseRole;
+    let parts: GeminiWire_ContentParts.ContentPart[] = [];
+
+    function flushContent() {
+      if (parts.length > 0)
+        contents.push({ role: currentRole, parts: parts });
+      parts = [];
+    }
+
     /* Semantically we want to preserve an empty assistant response, but Gemini requires
      * at least one part for a `Content` object, so the empty message becomes a "" instead.
      * E.g. { role: 'rolename', parts: [{text: ''}] }
@@ -323,6 +338,15 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresS
     }
 
     for (const part of message.parts) {
+      // Determine the target Gemini role for this part: tool_response -> 'user', everything else -> baseRole
+      const partRole: GeminiWire_Messages.Content['role'] = (isModelMessage && part.pt === 'tool_response') ? 'user' : baseRole;
+
+      // Flush on role boundary to preserve ordering
+      if (partRole !== currentRole) {
+        flushContent();
+        currentRole = partRole;
+      }
+
       let partRequiresSignature = false;
       switch (part.pt) {
 
@@ -330,7 +354,7 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresS
           parts.push(GeminiWire_ContentParts.TextPart(part.text));
 
           // [Gemini, 2025-11-20] Nano Banana Pro requires thoughtSignature on the first model text part
-          if (apiRequiresSignatures && message.role === 'model')
+          if (apiRequiresSignatures && isModelMessage)
             partRequiresSignature = true;
           break;
 
@@ -449,11 +473,9 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresS
       }
     }
 
-    return {
-      role: message.role === 'model' ? 'model' : 'user',
-      parts,
-    };
-  });
+    flushContent();
+    return contents;
+  }, []);
 }
 
 function _toGeminiTools(itds: AixTools_ToolDefinition[]): NonNullable<TRequest['tools']> {
