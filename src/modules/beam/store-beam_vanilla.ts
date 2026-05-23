@@ -76,6 +76,12 @@ const createRootSlice: StateCreator<BeamStore, [], [], RootStoreSlice> = (_set, 
   open: (chatHistory: Readonly<DMessage[]>, initialChatLlmId: DLLMId | null, isEditMode: boolean, callback: BeamSuccessCallback) => {
     const { isOpen: wasAlreadyOpen, terminateKeepingSettings, loadBeamConfig, hadImportedRays, setRayLlmIds, setCurrentGatherLlmId } = _get();
 
+    // if already open, preserve the live state (rays, fusions, callback) - re-invocation must never wipe an ongoing beam
+    if (wasAlreadyOpen) {
+      console.warn('[DEV] Beam is already open');
+      return;
+    }
+
     // reset pending operations
     terminateKeepingSettings();
 
@@ -112,7 +118,7 @@ const createRootSlice: StateCreator<BeamStore, [], [], RootStoreSlice> = (_set, 
       return;
 
     // it no config (first-time): Heuristic: auto-pick the best models for the user, based on their ELO and variety
-    const autoLlmIds = llmsHeuristicGetTopDiverseLlmIds(SCATTER_RAY_DEF, true, initialChatLlmId);
+    const autoLlmIds = llmsHeuristicGetTopDiverseLlmIds(SCATTER_RAY_DEF, true, initialChatLlmId ?? undefined);
     if (autoLlmIds.length > 0) {
       setRayLlmIds(autoLlmIds);
       setCurrentGatherLlmId(autoLlmIds[0]);

@@ -3,11 +3,11 @@ import { findServiceAccessOrThrow } from '~/modules/llms/vendors/vendor.helpers'
 import type { MaybePromise } from '~/common/types/useful.types';
 import { AIVndAntInlineFilesPolicy, getVndAntInlineFiles } from '~/common/stores/store-ai';
 import { AudioPlayer } from '~/common/util/audio/AudioPlayer';
-import { DLLM, DLLMId, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Responses, LLM_IF_Outputs_Audio, LLM_IF_Outputs_Image, LLM_IF_Outputs_NoText } from '~/common/stores/llms/llms.types';
+import { DLLM, DLLMId, LLM_IF_GEM_Interactions, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Responses, LLM_IF_Outputs_Audio, LLM_IF_Outputs_Image, LLM_IF_Outputs_NoText } from '~/common/stores/llms/llms.types';
 import { DMessage, DMessageGenerator, createGeneratorAIX_AutoLabel } from '~/common/stores/chat/chat.message';
 import { DMetricsChatGenerate_Lg, DMetricsChatGenerate_Md, metricsChatGenerateLgToMd, metricsComputeChatGenerateCostsMd, } from '~/common/stores/metrics/metrics.chatgenerate';
 import { DModelParameterValues, getAllModelParameterValues } from '~/common/stores/llms/llms.parameters';
-import { apiStream } from '~/common/util/trpc.client';
+import { apiAsync, apiStream } from '~/common/util/trpc.client';
 import { createErrorContentFragment, DMessageContentFragment, DMessageErrorPart, DMessageVoidFragment, isContentFragment, isErrorPart } from '~/common/stores/chat/chat.fragments';
 import { findLLMOrThrow } from '~/common/stores/llms/store-llms';
 import { getAixInspectorEnabled } from '~/common/stores/store-ui';
@@ -18,7 +18,7 @@ import { stripUndefined } from '~/common/util/objectUtils';
 import { webGeolocationCached } from '~/common/util/webGeolocationUtils';
 
 // NOTE: pay particular attention to the "import type", as this is importing from the server-side Zod definitions
-import type { AixAPI_Access, AixAPI_ConnectionOptions_ChatGenerate, AixAPI_Context_ChatGenerate, AixAPI_Model, AixAPIChatGenerate_Request, AixWire_Particles } from '../server/api/aix.wiretypes';
+import type { AixAPI_Access, AixAPI_ConnectionOptions_ChatGenerate, AixAPI_Context_ChatGenerate, AixAPI_Model, AixAPIChatGenerate_Request } from '../server/api/aix.wiretypes';
 
 import { AixStreamRetry } from './aix.client.retry';
 import { ReassemblerParticleTransforms, ContentReassembler } from './ContentReassembler';
@@ -35,6 +35,20 @@ export const DEBUG_PARTICLES = false;
 
 export function aixCreateChatGenerateContext(name: AixAPI_Context_ChatGenerate['name'], ref: string | '_DEV_'): AixAPI_Context_ChatGenerate {
   return { method: 'chat-generate', name, ref };
+}
+
+
+/**
+ * [CSF] Load the client-side-fetch executor module with a uniform error surface.
+ * ES modules are cached by the loader, so repeated calls are cheap (no re-fetch, no re-evaluate).
+ * Throws with a clear "Direct connection unsuccessful: ..." on chunk-load failure (preserves .cause).
+ */
+async function _loadCsfModuleOrThrow(): Promise<typeof import('./aix.client.direct-chatGenerate')> {
+  try {
+    return await import('./aix.client.direct-chatGenerate');
+  } catch (error) {
+    throw new Error(`Direct connection unsuccessful: ${(error as any)?.message || 'unknown loading error'}`, { cause: error });
+  }
 }
 
 export function aixCreateModelFromLLMOptions(
@@ -56,7 +70,7 @@ export function aixCreateModelFromLLMOptions(
     llmVndAntEffort, llmVndGemEffort, llmVndOaiEffort, llmVndMiscEffort,
     llmVndAnt1MContext, llmVndAntInfSpeed, llmVndAntSkills, llmVndAntThinkingBudget, llmVndAntWebDynamic, llmVndAntWebFetch, llmVndAntWebFetchMaxUses, llmVndAntWebSearch, llmVndAntWebSearchMaxUses,
     llmVndBedrockAPI,
-    llmVndGeminiAspectRatio, llmVndGeminiImageSize, llmVndGeminiCodeExecution, llmVndGeminiComputerUse, llmVndGeminiGoogleSearch, llmVndGeminiMediaResolution, llmVndGeminiThinkingBudget,
+    llmVndGeminiAgentViz, llmVndGeminiAspectRatio, llmVndGeminiImageSize, llmVndGeminiCodeExecution, llmVndGeminiComputerUse, llmVndGeminiGoogleSearch, llmVndGeminiMediaResolution, llmVndGeminiThinkingBudget,
     // llmVndMoonshotWebSearch,
     llmVndOaiRestoreMarkdown, llmVndOaiVerbosity, llmVndOaiWebSearchContext, llmVndOaiWebSearchGeolocation, llmVndOaiImageGeneration, llmVndOaiCodeInterpreter,
     llmVndOrtWebSearch,
@@ -83,6 +97,7 @@ export function aixCreateModelFromLLMOptions(
 
   // Output APIs
   const llmVndOaiResponsesAPI = llmInterfaces.includes(LLM_IF_OAI_Responses);
+  const llmVndGeminiInteractions = llmInterfaces.includes(LLM_IF_GEM_Interactions);
 
   // Client-side late stage model HotFixes
   const hotfixOmitTemperature = llmInterfaces.includes(LLM_IF_HOTFIX_NoTemperature);
@@ -127,6 +142,8 @@ export function aixCreateModelFromLLMOptions(
     ...(llmVndBedrockAPI ? { vndBedrockAPI: llmVndBedrockAPI } : {}),
 
     // Gemini
+    ...(llmVndGeminiInteractions ? { vndGeminiAPI: 'interactions-agent' } : {}),
+    ...(llmVndGeminiAgentViz === 'off' ? { vndGeminiAgentViz: 'off' } : {}), // Deep Research agent_config.visualization - only forward when explicitly disabled
     ...(llmVndGeminiAspectRatio ? { vndGeminiAspectRatio: llmVndGeminiAspectRatio } : {}),
     ...(llmVndGeminiCodeExecution === 'auto' ? { vndGeminiCodeExecution: llmVndGeminiCodeExecution } : {}),
     ...(llmVndGeminiComputerUse ? { vndGeminiComputerUse: llmVndGeminiComputerUse } : {}),
@@ -171,6 +188,8 @@ export function aixDecorateModelFromGlobals(model: AixAPI_Model, decorations: {
   vndAntContainerId?: string;
   // [Anthropic File Inlining] Global user policy; 'off' means don't decorate (caller can pass it raw)
   vndAntTransformInlineFiles?: AIVndAntInlineFilesPolicy;
+  // [Gemini Interactions] Session/sandbox env ID from a prior turn (no expiry gate on the wire today)
+  vndGeminiEnvironmentId?: string;
 }): void {
 
   // [Anthropic Container] Inject session state from a prior turn
@@ -181,6 +200,10 @@ export function aixDecorateModelFromGlobals(model: AixAPI_Model, decorations: {
   if (decorations.vndAntTransformInlineFiles && decorations.vndAntTransformInlineFiles !== 'off')
     model.vndAntTransformInlineFiles = decorations.vndAntTransformInlineFiles;
 
+  // [Gemini Interactions] Inject session/sandbox env from a prior turn
+  if (decorations.vndGeminiEnvironmentId)
+    model.vndGeminiEnvironmentId = decorations.vndGeminiEnvironmentId;
+
 }
 
 
@@ -188,15 +211,46 @@ interface AixClientOptions {
   abortSignal: AbortSignal | 'NON_ABORTABLE'; // 'NON_ABORTABLE' is a special case for non-abortable operations
   throttleParallelThreads?: number; // 0: disable, 1: default throttle (12Hz), 2+ reduce frequency with the square root
 
+  // [Reattach] Internal hook - set by `aixReattachContent_DMessage_orThrow`. When present, seeds the LL
+  // with this generator; the upstreamHandle on it triggers the LL reattach branch (Gemini Deep Research GET-poll).
+  reattachGenerator?: Readonly<DMessageGenerator> & Required<Pick<DMessageGenerator, 'upstreamHandle'>>;
+
   // LLM parameter configuration layers: full replacement of user params and/or overrides of a set of individual params
   llmUserParametersReplacement?: DModelParameterValues; // can replace the 'global' llm user configuration with an alternate config (e.g. persona, or per-chat)
   llmOptionsOverride?: Omit<DModelParameterValues, 'llmRef'>; // overrides (sets/replaces) individual LLM parameters
 
   // -- Session State - extract? --
-  // [Anthropic Container] Container ID from a prior turn (caller checks expiry before setting)
-  antContainerId?: string;
+  // Cross-turn sandbox/container handles. Caller may pre-populate; resolver walks chat history to fill any unset slot.
+  antContainerId?: string;            // [Anthropic Container] Container ID from a prior turn (caller checks expiry before setting)
+  gemEnvironmentId?: string;                  // [Gemini Interactions] Session/sandbox env id from a prior turn (today: Antigravity; no expiry on the wire; best-effort - no auto-fallback if upstream rejects)
 }
 
+
+/**
+ * Walks chat history newest-first for the most recent `upstreamContainer` matching `uct`. Stops at
+ * the first match - older candidates would be at least as expired. Returns null if not found or
+ * if the candidate expires within `expiryBufferMs` (default 15s; only gated when `expiresAt` is a
+ * string - `null` is accepted unconditionally).
+ *
+ * NOTE: the returned handle points at a MUTATING upstream resource, not a snapshot. Re-running an
+ * earlier turn rejoins the same container with whatever state intervening turns left behind.
+ * NOTE: there is no automatic fallback if upstream rejects the returned handle - the request fails
+ * and the error surfaces to the user. Recovery is on the next turn (which walks fresh history).
+ */
+type _UC = NonNullable<DMessageGenerator['upstreamContainer']>;
+
+function _findRecentUpstreamContainer<Uct extends _UC['uct']>(history: readonly DMessage[], uct: Uct, expiryBufferMs = 15_000): Extract<_UC, { uct: Uct }> | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const uc = history[i].generator?.upstreamContainer;
+    if (uc?.uct !== uct) continue;
+    if (typeof uc.expiresAt === 'string' && Date.parse(uc.expiresAt) - Date.now() <= expiryBufferMs) {
+      console.log(`[DEV] AIX: ${uc.uct} expired, not reusing.`);
+      return null;
+    }
+    return uc as Extract<_UC, { uct: Uct }>;
+  }
+  return null;
+}
 
 // --- L3 - Conversation-level generation (builds chat request, error wrapping) ---
 
@@ -240,21 +294,18 @@ export async function aixChatGenerateContent_DMessage_FromConversation(
       chatSequence: await aixCGR_ChatSequence_FromDMessagesOrThrow(chatHistoryWithoutSystemMessages),
     };
 
-    // [Anthropic Container] Session resolution: walk history backwards to find the most recent
-    // unexpired container. Stops at the first container found (same session = same container;
-    // older containers from the same session would be at least as expired).
-    if (!clientOptions.antContainerId)
-      for (let i = chatHistoryWithoutSystemMessages.length - 1; i >= 0; i--) {
-        const uc = chatHistoryWithoutSystemMessages[i].generator?.upstreamContainer;
-        if (uc?.uct === 'vnd.ant.container') {
-          const remainingMs = Date.parse(uc.expiresAt) - Date.now();
-          if (remainingMs <= 15_000)
-            console.log(`[DEV] AIX: Anthropic container ${uc.containerId} expired ${Math.round(-remainingMs / 1000)}s ago, not reusing.`);
-          else
-            clientOptions = { ...clientOptions, antContainerId: uc.containerId };
-          break;
-        }
-      }
+    // Cross-turn upstream-container resolution. Walks history newest-first, stops at the first
+    // match per `uct`. Each vendor has different expiry semantics - see `findRecentUpstreamContainer`.
+    //  - Anthropic: server returns `expiresAt` ISO string; 15s buffer before reuse.
+    //  - Gemini Interactions: 7d retention from last-active (per docs); parser stamps `expiresAt: now + 7d` on every turn that touches the env, so the same 15s buffer works.
+    if (!clientOptions.antContainerId) {
+      const uc = _findRecentUpstreamContainer(chatHistoryWithoutSystemMessages, 'vnd.ant.container');
+      if (uc) clientOptions = { ...clientOptions, antContainerId: uc.containerId };
+    }
+    if (!clientOptions.gemEnvironmentId) {
+      const uc = _findRecentUpstreamContainer(chatHistoryWithoutSystemMessages, 'vnd.gem.interactions');
+      if (uc) clientOptions = { ...clientOptions, gemEnvironmentId: uc.envId };
+    }
 
     const { outcome, ...resultDMessage } = await aixChatGenerateContent_DMessage_orThrow(
       llmId,
@@ -263,8 +314,7 @@ export async function aixChatGenerateContent_DMessage_FromConversation(
       true,
       clientOptions,
       async (update: AixChatGenerateContent_DMessageGuts, isDone: boolean) => {
-        lastDMessage = update;
-        await onStreamingUpdate(lastDMessage, isDone);
+        await onStreamingUpdate(lastDMessage = update, isDone);
       },
     );
 
@@ -280,6 +330,11 @@ export async function aixChatGenerateContent_DMessage_FromConversation(
       generator: { ...lastDMessage.generator, tokenStopReason: 'issue' },
       pendingIncomplete: false,
     }
+
+    // final update
+    // emitted because we modify the contents above, and the logic may use the callback rather than the final return value's message
+    await onStreamingUpdate(lastDMessage /* last we heard + the error */, true);
+
     return { outcome: 'failed', lastDMessage, outcomeFailedMessage: errorMessage };
 
   }
@@ -322,7 +377,7 @@ export async function aixChatGenerateText_Simple(
   aixContextRef: AixAPI_Context_ChatGenerate['ref'],
   // optional options
   clientOptions?: Partial<AixClientOptions>, // this makes the abortController optional
-  // optional callback for streaming
+  // optional callback - if provided, streaming is activated
   onTextStreamUpdate?: (text: string, isDone: boolean, generator: DMessageGenerator) => MaybePromise<void>,
 ): Promise<string> {
 
@@ -343,14 +398,13 @@ export async function aixChatGenerateText_Simple(
   // Aix Context
   const aixContext = aixCreateChatGenerateContext(aixContextName, aixContextRef);
 
-  // Aix Streaming - implicit if the callback is provided
-  let aixStreaming = !!onTextStreamUpdate;
+  // Caller streaming preference - implicit: stream if a callback is provided
+  const callerStreaming = !!onTextStreamUpdate;
 
 
   // Client-side late stage model HotFixes
-  const { shallDisableStreaming } = await clientHotFixGenerateRequest_ApplyAll(llm.interfaces, aixChatGenerate, llmParameters.llmRef || llm.id);
-  if (shallDisableStreaming || aixModel.forceNoStream)
-    aixStreaming = false;
+  const { hotfixNoStream } = await clientHotFixGenerateRequest_ApplyAll(llm.interfaces, aixChatGenerate, llmParameters.llmRef || llm.id);
+  const wireStreaming = !hotfixNoStream && !aixModel.forceNoStream ? callerStreaming : false;
 
 
   // Variable to store the final text
@@ -378,11 +432,11 @@ export async function aixChatGenerateText_Simple(
     aixModel,
     aixChatGenerate,
     aixContext,
-    aixStreaming,
+    wireStreaming,
     state.generator,
     abortSignal,
     clientOptions?.throttleParallelThreads ?? 0,
-    !aixStreaming ? undefined : async (ll: AixChatGenerateContent_LL, _isDone: boolean /* we want to issue this, in case the next action is an exception */) => {
+    !onTextStreamUpdate ? undefined : async (ll: AixChatGenerateContent_LL, _isDone: boolean /* we want to issue this, in case the next action is an exception */) => {
       _llToL2Simple(ll, state);
       if (onTextStreamUpdate && state.text !== null)
         await onTextStreamUpdate(state.text, false, state.generator);
@@ -492,7 +546,7 @@ type _AixChatGenerateContent_DMessageGuts_WithOutcome = AixChatGenerateContent_D
  * @throws Error if the LLM is not found or other misconfigurations, but handles most other errors internally.
  *
  * Features:
- * - Throttling if requrested (decimates the requests based on the square root of the number parllel hints)
+ * - Throttling if requested (decimates the requests based on the square root of the number parallel hints)
  * - computes the costs and metrics for the chat generation
  * - vendor-specific rate limit
  * - 'pendingIncomplete' logic
@@ -501,7 +555,7 @@ type _AixChatGenerateContent_DMessageGuts_WithOutcome = AixChatGenerateContent_D
  * @param llmId - ID of the Language Model to use
  * @param aixChatGenerate - Multi-modal chat generation request specifics, including Tools and high-level metadata
  * @param aixContext - Information about how this chat generation is being used
- * @param aixStreaming - Whether to use streaming for generation
+ * @param aixStreaming - Caller's wire-streaming preference. Subject to override by model/hotfix constraints, or dispatch constraints
  * @param clientOptions - Client options for the operation
  * @param onStreamingUpdate - Optional callback for streaming updates
  *
@@ -529,19 +583,19 @@ export async function aixChatGenerateContent_DMessage_orThrow<TServiceSettings e
   aixDecorateModelFromGlobals(aixModel, {
     vndAntContainerId: clientOptions?.antContainerId,
     vndAntTransformInlineFiles: aixAccess.dialect === 'anthropic' ? getVndAntInlineFiles() : undefined,
+    vndGeminiEnvironmentId: clientOptions?.gemEnvironmentId,
   });
 
-  // Client-side late stage model HotFixes
-  const { shallDisableStreaming } = await clientHotFixGenerateRequest_ApplyAll(llm.interfaces, aixChatGenerate, llmParameters.llmRef || llm.id);
-  if (shallDisableStreaming || aixModel.forceNoStream)
-    aixStreaming = false;
+  // Client-side late stage model HotFixes - collapse the caller's requested streaming preference into the effective wire-streaming decision after constraints (hotfix gate, model.forceNoStream)
+  const { hotfixNoStream } = await clientHotFixGenerateRequest_ApplyAll(llm.interfaces, aixChatGenerate, llmParameters.llmRef || llm.id);
+  const wireStreaming = !hotfixNoStream && !aixModel.forceNoStream ? aixStreaming : false;
 
   // Legacy Note: awaited OpenAI moderation check was removed (was only on this codepath)
 
   // Aix LL Chat Generation
   const dMessage: AixChatGenerateContent_DMessageGuts = {
     fragments: [],
-    generator: createGeneratorAIX_AutoLabel(llm.vId, llm.id), // using llm.id (not aixModel.id/ref) so we can re-select them in the UI (Beam)
+    generator: clientOptions.reattachGenerator ?? createGeneratorAIX_AutoLabel(llm.vId, llm.id), // using llm.id (not aixModel.id/ref) so we can re-select them in the UI (Beam)
     pendingIncomplete: true,
   };
 
@@ -564,7 +618,7 @@ export async function aixChatGenerateContent_DMessage_orThrow<TServiceSettings e
     aixModel,
     aixChatGenerate,
     aixContext,
-    aixStreaming,
+    wireStreaming,
     dMessage.generator,
     clientOptions.abortSignal,
     clientOptions.throttleParallelThreads ?? 0,
@@ -624,6 +678,87 @@ function _finalizeLlmMetricsWithCosts(cgMetricsLg: undefined | DMetricsChatGener
 }
 
 
+// --- L2 - Content Generation reattachment as DMessage ---
+
+/**
+ * Reattach mode selects how to reconstruct an in-progress upstream run:
+ *  - 'replay'   - canonical: SSE replays the event sequence from the start. Live deltas reach
+ *                 the UI as the run progresses (or as past content is replayed).
+ *  - 'snapshot' - one-shot JSON GET returns the resource as-is right now. Used to recover when
+ *                 the SSE endpoint is broken upstream but the resource itself is still readable.
+ *
+ * Names describe what you get, not how. See `kb/modules/LLM-gemini-interactions.md` for failure modes.
+ */
+export type AixReattachMode = 'replay' | 'snapshot';
+
+/**
+ * Reattach facade: wraps `aixChatGenerateContent_DMessage_orThrow` for the reattach-to-upstream flow.
+ * - Validates the generator carries an `upstreamHandle`
+ * - Stubs the unused chat-generate request, and
+ * - Seeds the base function so the LL's reattach branch fires.
+ *
+ * The reassembler replaces content on reattach (Gemini Interactions snapshots are cumulative, so this rebuilds from scratch).
+ */
+export async function aixReattachContent_DMessage_orThrow(
+  llmId: DLLMId,
+  reattachGenerator: Readonly<DMessageGenerator>,
+  aixContext: AixAPI_Context_ChatGenerate,
+  mode: AixReattachMode,
+  clientOptions: Pick<AixClientOptions, 'abortSignal' | 'throttleParallelThreads'>,
+  onStreamingUpdate?: (update: AixChatGenerateContent_DMessageGuts, isDone: boolean) => MaybePromise<void>,
+): Promise<_AixChatGenerateContent_DMessageGuts_WithOutcome> {
+
+  if (!reattachGenerator.upstreamHandle)
+    throw new Error('aixReattachContent: generator must have an upstreamHandle');
+
+  // Stub chat-generate request - unused on reattach (server GET-polls by the handle on reattachGenerator)
+  const stubChatGenerate: AixAPIChatGenerate_Request = { systemMessage: null, chatSequence: [] };
+
+  return aixChatGenerateContent_DMessage_orThrow(
+    llmId,
+    stubChatGenerate,
+    aixContext,
+    mode === 'replay', // wire-level: SSE demuxer (replay) vs one-shot JSON body (snapshot)
+    { ...clientOptions, reattachGenerator: reattachGenerator as any /* guaranteed by the check */ },
+    onStreamingUpdate,
+  );
+}
+
+
+// --- L2 - Delete upstream handle (symmetric to reattach) ---
+
+/**
+ * Delete facade: DELETE the upstream-stored run identified by the generator's handle.
+ * Symmetric to `aixReattachContent_DMessage_orThrow` but terminal - after this, the handle is gone upstream.
+ *
+ * Does NOT mutate the DMessage - the caller decides how to react (typically clear the handle on ok).
+ * Shape mirrors reattach: resolve access from the generator's llmId, then call the procedure (tRPC or CSF).
+ */
+export async function aixDeleteUpstreamContent_orThrow(
+  llmId: DLLMId,
+  generator: Readonly<DMessageGenerator>,
+  abortSignal?: AbortSignal,
+) {
+  if (!generator.upstreamHandle) throw new Error('aixDeleteUpstreamContent: generator must have an upstreamHandle');
+
+  // short-circuit if already expired upstream - no network call, caller can clear locally.
+  // if (expiresAt != null && Date.now() > expiresAt)
+  //   return { ok: true, message: 'Already expired upstream' };
+
+  // resolve the vendor access from the LLM
+  const llm = findLLMOrThrow(llmId);
+  const { transportAccess: aixAccess } = findServiceAccessOrThrow<object, AixAPI_Access>(llm.sId);
+
+  // AIX [CSF] Direct delete when the vendor supports it
+  if (aixAccess.clientSideFetch) {
+    const { clientSideDeleteUpstream } = await _loadCsfModuleOrThrow();
+    return await clientSideDeleteUpstream(aixAccess, generator.upstreamHandle, abortSignal ?? new AbortController().signal);
+  }
+  // ... otherwise, tRPC delete
+  return await apiAsync.aix.upstreamDeleteContent.mutate({ access: aixAccess, upstreamHandle: generator.upstreamHandle }, { signal: abortSignal });
+}
+
+
 // --- LL Low-Level (Level 1) - Streaming loop with retry/reassembler ---
 
 /**
@@ -660,7 +795,7 @@ export type AixChatGenerateTerminal_LL = 'completed' | 'aborted' | 'failed';
  *
  * Contract:
  * - empty fragments means no content yet, and no error
- * - aixStreaming hints the source, but can be respected or not
+ * - wireStreaming hints the wire transport (SSE vs single response), but can be respected or not by the dispatch (e.g. SSE-only APIs ignore a `false` value)
  *   - onReassemblyUpdate is optional, you can ignore the updates and await the final result
  * - errors become Error fragments, and they can be dialect-sent, dispatch-excepts, client-read issues or even user aborts
  *   - DOES NOT THROW, but the final accumulator may contain error fragments
@@ -679,7 +814,7 @@ export type AixChatGenerateTerminal_LL = 'completed' | 'aborted' | 'failed';
  *    - special parts include 'In Reference To' (a decorator of messages)
  *    - other special parts include the Anthropic Caching hints, on select message
  * @param aixContext specifies the scope of the caller, such as what's the high level objective of this call
- * @param aixStreaming requests the source to provide incremental updates
+ * @param wireStreaming the effective wire-level streaming decision (already collapsed from caller preference + model/hotfix constraints); drives tRPC `streaming` field and downstream dispatch body shape
  * @param initialGenerator generator initial value, which will be updated for every new piece of information received
  * @param abortSignal allows the caller to stop the operation
  * @param throttleParallelThreads allows the caller to limit the number of parallel threads
@@ -697,7 +832,7 @@ async function _aixChatGenerateContent_LL(
   aixModel: AixAPI_Model,
   aixChatGenerate: AixAPIChatGenerate_Request,
   aixContext: AixAPI_Context_ChatGenerate,
-  aixStreaming: boolean,
+  wireStreaming: boolean,
   // others
   initialGenerator: DMessageGenerator,
   abortSignal: AbortSignal,
@@ -711,16 +846,20 @@ async function _aixChatGenerateContent_LL(
   const inspectorTransport = !inspectorEnabled ? undefined : aixAccess.clientSideFetch ? 'csf' : 'trpc';
   const inspectorContext = !inspectorEnabled ? undefined : { contextName: aixContext.name, contextRef: aixContext.ref };
 
-  // [DEV] Inspector - request body override
+  // Inspector - override request body
   const requestBodyOverrideJson = inspectorEnabled && aixClientDebuggerGetRBO();
   const debugRequestBodyOverride = !requestBodyOverrideJson ? false : JSON.parse(requestBodyOverrideJson);
 
+  // Inspector - force disable streaming (note: dispatches may still override this)
+  if (getAixDebuggerNoStreaming()) wireStreaming = false;
+
   /**
    * FIXME: implement client selection of resumability - aixAccess option?
-   * For now we turn it on for Responses API for select kinds of request.
+   * NOTE: for Gemini Deep Research, it's on by default, so both auto-reattach on network breaks (currently disabled)
+   * and manual reattach (coming into this same function) both work.
    */
-  const requestResumability = !!aixModel.vndOaiResponsesAPI &&
-    (['conversation', 'beam-scatter', 'beam-gather'] satisfies (AixAPI_Context_ChatGenerate['name'] | string)[]).includes(aixContext.name);
+  // const requestResumability = !!aixModel.vndOaiResponsesAPI &&
+  //   (['conversation', 'beam-scatter', 'beam-gather'] satisfies (AixAPI_Context_ChatGenerate['name'] | string)[]).includes(aixContext.name);
 
   const aixConnectionOptions: AixAPI_ConnectionOptions_ChatGenerate = {
     ...inspectorEnabled && { debugDispatchRequest: true, debugProfilePerformance: true },
@@ -730,14 +869,14 @@ async function _aixChatGenerateContent_LL(
   } as const;
 
 
-  // [CSF] Pre-load client-side executor if needed
-  let clientSideChatGenerate: typeof import('./aix.client.direct-chatGenerate').clientSideChatGenerate | undefined = undefined;
-  if (aixAccess.clientSideFetch)
-    try {
-      clientSideChatGenerate = (await import('./aix.client.direct-chatGenerate')).clientSideChatGenerate;
-    } catch (error) {
-      throw new Error(`Direct connection unsuccessful: ${(error as any)?.message || 'unknown loading error'}`, { cause: error });
-    }
+  // [CSF] Pre-load client-side executor if needed - type inference works here, no need to type
+  let clientSideChatGenerate;
+  let clientSideReattachUpstream;
+  if (aixAccess.clientSideFetch) {
+    const csf = await _loadCsfModuleOrThrow();
+    clientSideChatGenerate = csf.clientSideChatGenerate;
+    clientSideReattachUpstream = csf.clientSideReattachUpstream;
+  }
 
 
   // Client-side particle transforms:
@@ -768,7 +907,7 @@ async function _aixChatGenerateContent_LL(
 
   // Retry/Reconnect - LL state machine
   // - reconnect: for server overload/busy (429, 503, 502) and transient errors
-  // - resume: for network disconnects with OpenAI Responses API handle
+  // - reattach: for network disconnects with uptream handles
   const rsm = new AixStreamRetry(0, 0); // sensible: 3, 2
 
   while (true) {
@@ -791,40 +930,50 @@ async function _aixChatGenerateContent_LL(
 
     try {
 
-      let particleStream: AsyncIterable<AixWire_Particles.ChatGenerateOp, void>;
+      // let particleStream: AsyncIterable<AixWire_Particles.ChatGenerateOp, void>;
+      const particleStream = !accumulator_LL.generator.upstreamHandle ? (
 
-      // AIX [CSM] Direct Execution
-      if (!accumulator_LL.generator.upstreamHandle && clientSideChatGenerate)
-        particleStream = clientSideChatGenerate(
+        // AIX Fesh from Chat Input - [CSF] Direct Execution
+        clientSideChatGenerate ? clientSideChatGenerate(
           aixAccess,
           aixModel,
           aixChatGenerate,
           aixContext,
-          getAixDebuggerNoStreaming() ? false : aixStreaming,
+          wireStreaming,
           aixConnectionOptions,
           abortSignal,
-        );
-
-      // AIX tRPC Streaming Generation from Chat input
-      else if (!accumulator_LL.generator.upstreamHandle)
-        particleStream = await apiStream.aix.chatGenerateContent.mutate({
+        ) :
+        // AIX Fresh from Chat Input - tRPC
+        await apiStream.aix.chatGenerateContent.mutate({
           access: aixAccess,
           model: aixModel,
           chatGenerate: aixChatGenerate,
           context: aixContext,
-          streaming: getAixDebuggerNoStreaming() ? false : aixStreaming, // [DEV] disable streaming if set in the UX (testing)
+          streaming: wireStreaming,
           connectionOptions: aixConnectionOptions,
-        }, { signal: abortSignal });
+        }, { signal: abortSignal })
 
-      // AIX tRPC Streaming re-attachment from handle - for LL auto-resume
-      else
-        particleStream = await apiStream.aix.reattachContent.mutate({
+      ) : (
+
+        // AIX Reattach from Upstream Handle - [CSF] - bypasses edge runtime, no 5-min timeout
+        clientSideReattachUpstream ? clientSideReattachUpstream(
+          aixAccess,
+          accumulator_LL.generator.upstreamHandle,
+          aixContext,
+          wireStreaming,
+          aixConnectionOptions,
+          abortSignal,
+        ) :
+        // AIX Reattach from Upstream Handle - tRPC
+        await apiStream.aix.upstreamReattachContent.mutate({
           access: aixAccess,
-          resumeHandle: accumulator_LL.generator.upstreamHandle,
+          upstreamHandle: accumulator_LL.generator.upstreamHandle,
           context: aixContext,
-          streaming: true,
+          streaming: wireStreaming,
           connectionOptions: aixConnectionOptions,
-        }, { signal: abortSignal });
+        }, { signal: abortSignal })
+
+      );
 
       /**
        * Stream Consumption Loop - MUST be synchronous (no awaits).
@@ -865,7 +1014,7 @@ async function _aixChatGenerateContent_LL(
       const { errorType, errorMessage } = aixClassifyStreamingError(error, abortSignal.aborted, !!accumulator_LL.fragments.length);
       const maybeErrorStatusCode = error?.status || error?.response?.status || undefined;
 
-      // client-side-retry decision - resume handle from accumulator determines strategy (resume vs reconnect)
+      // client-side-retry decision - reattach handle from accumulator determines strategy (reattach vs reconnect)
       const shallRetry = rsm.shallRetry(errorType, maybeErrorStatusCode, !!accumulator_LL.generator.upstreamHandle);
       if (shallRetry) {
 

@@ -73,6 +73,18 @@ export const DevNewsItem: NewsItem = {
 // news and feature surfaces
 export const NewsItems: NewsItem[] = [
   {
+    versionCode: '2.0.5',
+    versionName: 'Roberto',
+    versionDate: new Date('2026-05-13T12:00:00Z'),
+    items: [
+      { text: <><B>Opus 4.7</B> with 1M context, <B>GPT-5.5</B>, <B>DeepSeek V4</B> Flash & Pro, <B>Gemini 3.1 Flash</B> family, <B>Grok 4.3</B>, <B>Kimi K2.6</B></> },
+      { text: <><B>Anthropic Containers</B>: persistent files, Skills, bash sessions, dynamic filtering across turns</> },
+      { text: <><B>MiniMax</B> and <B>Arcee AI</B> vendors; expanded Ollama, OpenRouter, Chutes catalogs</> },
+      { text: <>Beam: auto-titles, no accidental wipe, no ghost columns, edit fixes, regression fixes</> },
+      { text: <>Fixes: OpenAI Responses tools, encrypted reasoning</> },
+    ],
+  },
+  {
     versionCode: '2.0.4',
     versionName: 'Hyper Params',
     versionDate: new Date('2026-03-25T12:00:00Z'),
@@ -191,7 +203,7 @@ export const NewsItems: NewsItem[] = [
       { text: <>Major <B href='https://x.com/enricoros/status/1756553038293303434'>performance optimizations</B>: runs faster, saves power, saves memory</> },
       { text: <>Improvements: auto-size charts, search and folder experience</> },
       { text: <>Perfect chat scaling, with rapid keyboard shortcuts</> },
-      { text: <>Also: diagrams auto-resize, open code with StackBlitz and JSFiddle, quick model visibility toggle, open links externally, docs on the web</> },
+      { text: <>Also: diagrams auto-resize, quick model visibility toggle, open links externally, docs on the web</> },
       { text: <>Fixes: standalone LaTeX blocks, close views by dragging, knowledge cutoff dates, crashes on Google translate (thanks dad)</> },
     ],
   },

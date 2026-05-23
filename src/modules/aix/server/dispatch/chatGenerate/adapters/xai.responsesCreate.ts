@@ -8,7 +8,7 @@ import { aixSpillShallFlush, aixSpillSystemToUser, approxDocPart_To_String } fro
 
 
 // configuration
-const AIX_XAI_ADD_ENCRYPTED_REASONING = false;
+const AIX_XAI_ADD_ENCRYPTED_REASONING = true;
 // const AIX_XAI_ADD_INLINE_CITATIONS = true; // yes but we don't know how yet
 
 
@@ -95,17 +95,19 @@ export function aixToXAIResponses(
   }
 
   // Reasoning
+  // - grok-4.3:                  none/low(default)/medium/high
+  // - grok-4.20-multi-agent:     low/medium/high/xhigh (4 vs 16 agents)
+  // - grok-4.20 reasoning/non-reasoning: no effort param (slug selects mode)
   const reasoningEffort = model.reasoningEffort; // ?? model.vndOaiReasoningEffort;
-  if (reasoningEffort === 'none' || reasoningEffort === 'minimal' || reasoningEffort === 'xhigh' || reasoningEffort === 'max') // domain validation
+  if (reasoningEffort === 'minimal' || reasoningEffort === 'max') // domain validation: still unsupported
     throw new Error(`XAI Responses API does not support reasoning effort '${reasoningEffort}'`);
 
-  if (reasoningEffort) {
-    payload.reasoning = {
-      effort: reasoningEffort,
-      // generate_summary: unsupported
-      // summary: unsupported, defaults to 'detailed'
-    };
-  }
+  // Always request detailed reasoning summaries - grok-4.3 and others have reasoning enabled by default
+  // but only return summary text when explicitly requested. Also set effort when configured.
+  payload.reasoning = {
+    ...(reasoningEffort ? { effort: reasoningEffort } : {}),
+    summary: 'detailed',
+  };
 
   // Add include options for reasoning and specialized for tool sources
   if (AIX_XAI_ADD_ENCRYPTED_REASONING)
@@ -220,6 +222,16 @@ function _toXAIResponsesInput(
     });
   }
 
+  function newReasoningItem(itemId: string | undefined, encryptedContent: string | undefined) {
+    // Mirror of the OpenAI Responses adapter - xAI Responses accepts the same reasoning input item shape.
+    inputItems.push({
+      type: 'reasoning' as const,
+      ...(itemId ? { id: itemId } : {}),
+      summary: [],
+      ...(encryptedContent ? { encrypted_content: encryptedContent } : {}),
+    });
+  }
+
   for (const aixMessage of chatSequence) {
     const { role: messageRole, parts: messageParts } = aixMessage;
 
@@ -319,7 +331,15 @@ function _toXAIResponsesInput(
               break;
 
             case 'ma':
-              // reasoning/thinking block - ignored for input
+              // xAI uses its OWN _vnd namespace - the wire schema mirrors OpenAI's, but encrypted_content is
+              // encrypted with xAI-private keys and the rs_... id references xAI-private server state. Crossing
+              // these (e.g., replaying an OpenAI handle to xAI or vice versa) yields "Item with id rs_... not
+              // found" or silent reasoning corruption.
+              // Round-trip ONLY when both encrypted_content AND id are present (canonical, complete handle).
+              // Defense-in-depth: matches the parser's capture gate; rejects torn handles even if any sneak through.
+              const xaiReasoning = part._vnd?.xai?.reasoningItem;
+              if (xaiReasoning?.encryptedContent && xaiReasoning?.id)
+                newReasoningItem(xaiReasoning.id, xaiReasoning.encryptedContent);
               break;
 
             case 'tool_response':

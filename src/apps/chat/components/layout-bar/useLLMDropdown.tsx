@@ -15,9 +15,10 @@ import { KeyStroke } from '~/common/components/KeyStroke';
 import { OptimaBarControlMethods, OptimaBarDropdownMemo, OptimaDropdownItems } from '~/common/layout/optima/bar/OptimaBarDropdown';
 import { findModelsServiceOrNull } from '~/common/stores/llms/store-llms';
 import { isDeepEqual } from '~/common/util/hooks/useDeep';
+import { sortLLMsByServiceLabel } from '~/common/stores/llms/components/llms.dropdown.utils';
 import { optimaActions, optimaOpenModels } from '~/common/layout/optima/useOptima';
 import { useAllLLMs } from '~/common/stores/llms/hooks/useAllLLMs';
-import { useModelDomain } from '~/common/stores/llms/hooks/useModelDomain';
+import { setPrimaryChatModelId, useModelDomain } from '~/common/stores/llms/hooks/useModelDomain';
 import { useUIComplexityMode } from '~/common/stores/store-ui';
 
 
@@ -25,7 +26,7 @@ function LLMDropdown(props: {
   dropdownRef: React.Ref<OptimaBarControlMethods>,
   llms: ReadonlyArray<DLLM>,
   chatLlmId: undefined | DLLMId | null,
-  setChatLlmId: (llmId: DLLMId | null) => void,
+  setChatLlmId: (llmId: DLLMId) => void,
   placeholder?: string,
 }) {
 
@@ -72,7 +73,10 @@ function LLMDropdown(props: {
       return lcFilterString ? true : isLLMVisible(llm);
     });
 
-    for (const llm of filteredLLMs) {
+    // sort by service label so vendor groups appear alphabetically (groups remain contiguous because sort is stable on equal keys)
+    const sortedLLMs = sortLLMsByServiceLabel(filteredLLMs);
+
+    for (const llm of sortedLLMs) {
       // add separators when changing services
       if (!prevServiceId || llm.sId !== prevServiceId) {
         const vendor = findModelVendor(llm.vId);
@@ -212,11 +216,11 @@ export function useChatLLMDropdown(dropdownRef: React.Ref<OptimaBarControlMethod
 
   // external state
   const llms = useAllLLMs();
-  const { domainModelId: chatLLMId, assignDomainModelId: setChatLLMId } = useModelDomain('primaryChat');
+  const { domainModelId: chatLLMId } = useModelDomain('primaryChat');
 
   const chatLLMDropdown = React.useMemo(() => {
-    return <LLMDropdown dropdownRef={dropdownRef} llms={llms} chatLlmId={chatLLMId} setChatLlmId={setChatLLMId} />;
-  }, [chatLLMId, dropdownRef, llms, setChatLLMId]);
+    return <LLMDropdown dropdownRef={dropdownRef} llms={llms} chatLlmId={chatLLMId} setChatLlmId={setPrimaryChatModelId} />;
+  }, [chatLLMId, dropdownRef, llms]);
 
   return { chatLLMId, chatLLMDropdown };
 }

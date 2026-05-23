@@ -4,8 +4,8 @@
  * This module only imports zod for schema definition and provides access logic
  * that works identically on server and client environments.
  *
- * Supports 15 OpenAI-compatible dialects: alibaba, azure, deepseek, groq, lmstudio,
- * localai, mistral, moonshot, openai, openpipe, openrouter, perplexity, togetherai, xai, zai
+ * Supports 14 OpenAI-compatible dialects: alibaba, azure, deepseek, groq, lmstudio,
+ * localai, mistral, moonshot, openai, openrouter, perplexity, togetherai, xai, zai
  */
 
 import * as z from 'zod/v4';
@@ -16,6 +16,7 @@ import { BaseProduct } from '~/common/app.release';
 import { env } from '~/server/env.server';
 
 import type { RequestAccessValues } from '../llm.server.types';
+import { llmsFixupHost, llmsHostnameMatches } from '../../shared/llm.isomorphic';
 
 
 // configuration
@@ -28,7 +29,6 @@ const DEFAULT_LOCALAI_HOST = 'http://127.0.0.1:8080';
 const DEFAULT_MISTRAL_HOST = 'https://api.mistral.ai';
 const DEFAULT_MOONSHOT_HOST = 'https://api.moonshot.ai';
 const DEFAULT_OPENAI_HOST = 'api.openai.com';
-const DEFAULT_OPENPIPE_HOST = 'https://app.openpipe.ai/api';
 const DEFAULT_OPENROUTER_HOST = 'https://openrouter.ai/api';
 const DEFAULT_PERPLEXITY_HOST = 'https://api.perplexity.ai';
 const DEFAULT_TOGETHERAI_HOST = 'https://api.together.xyz';
@@ -59,35 +59,6 @@ export const OPENAI_API_PATHS = {
 } as const;
 
 
-// --- Fixup Host (all accesses) ---
-
-/** Add https if missing, and remove trailing slash if present and the path starts with a slash. */
-export function llmsFixupHost(host: string, apiPath: string): string {
-  if (!host)
-    return '';
-  if (!host.startsWith('http'))
-    host = `https://${host}`;
-  if (host.endsWith('/') && apiPath.startsWith('/'))
-    host = host.slice(0, -1);
-  return host;
-}
-
-/**
- * Safely check if a host URL's hostname matches the expected hostname.
- * This prevents DNS spoofing attacks where malicious hosts like "api.openai.com.evil.com"
- * would pass simple string `.includes()` checks.
- */
-export function llmsHostnameMatches(hostUrl: string | undefined, expectedHostname: string): boolean {
-  if (!hostUrl)
-    return false;
-  try {
-    const url = new URL(hostUrl.startsWith('http') ? hostUrl : `https://${hostUrl}`);
-    return url.hostname === expectedHostname;
-  } catch {
-    return false;
-  }
-}
-
 /** Select a random key from a comma-separated list of API keys, used to load balance. */
 export function llmsRandomKeyFromMultiKey(multiKeyString: string): string {
   if (!multiKeyString.includes(','))
@@ -112,12 +83,12 @@ export type OpenAIAccessSchema = z.infer<typeof openAIAccessSchema>;
 export const openAIAccessSchema = z.object({
   dialect: z.enum([
     'alibaba', 'azure', 'deepseek', 'groq', 'lmstudio',
-    'localai', 'mistral', 'moonshot', 'openai', 'openpipe',
+    'localai', 'mistral', 'moonshot', 'openai',
     'openrouter', 'perplexity', 'togetherai', 'xai', 'zai',
   ]),
   clientSideFetch: z.boolean().optional(), // optional: backward compatibility from newer server version - can remove once all clients are updated
   oaiKey: z.string().trim(),
-  oaiOrg: z.string().trim(), // [OpenPipe] we have a hack here, where we put the tags stringified JSON in here - cleanup in the future
+  oaiOrg: z.string().trim(),
   oaiHost: z.string().trim(),
   heliKey: z.string().trim(),
 
@@ -315,21 +286,6 @@ export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | nu
         url: oaiHost + apiPath,
       };
     }
-
-    case 'openpipe':
-      const openPipeKey = access.oaiKey || env.OPENPIPE_API_KEY || '';
-      if (!openPipeKey)
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing OpenPipe API Key or Host. Add it on the UI or server side (your deployment).' });
-
-      return {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openPipeKey}`,
-          'op-log-request': 'true',
-          ...(access.oaiOrg && { 'op-tags': access.oaiOrg }),
-        },
-        url: llmsFixupHost(DEFAULT_OPENPIPE_HOST, apiPath) + apiPath,
-      };
 
     case 'openrouter':
       let orKey = access.oaiKey || env.OPENROUTER_API_KEY || '';
