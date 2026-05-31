@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 
 import type { DConversationId } from '~/common/stores/chat/chat.conversation';
 import { agiUuid } from '~/common/util/idUtils';
+import { startFolderSync } from './folder.sync';
 
 
 export interface DFolder {
@@ -15,6 +16,7 @@ export interface DFolder {
 interface FolderState {
   folders: DFolder[];
   enableFolders: boolean; // user setting - default to off until we get enough feedback
+  updatedAt: number;
 }
 
 interface FolderActions {
@@ -33,13 +35,23 @@ type FolderStore = FolderState & FolderActions;
 
 export const useFolderStore = create<FolderStore>()(/*devtools(*/
   persist(
-    (set, _get) => ({
+    (_set, _get) => {
+      // Wrapper for set to always update the updatedAt timestamp
+      const set: typeof _set = (partial: any, replace: any) => {
+        _set((state) => {
+          const newState = typeof partial === 'function' ? partial(state) : partial;
+          return { ...newState, updatedAt: Date.now() } as FolderStore;
+        }, replace);
+      };
 
-      // Initial state
-      folders: [],
-      enableFolders: false,
+      return {
 
-      // Actions
+        // Initial state
+        folders: [],
+        enableFolders: false,
+        updatedAt: 0,
+
+        // Actions
       importFoldersAppend: (folders: DFolder[], enableFolders: boolean) =>
         set(state => ({
           folders: [
@@ -119,9 +131,14 @@ export const useFolderStore = create<FolderStore>()(/*devtools(*/
         enableFolders: !state.enableFolders,
       })),
 
-    }),
+      };
+    },
     {
       name: 'app-folders',
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        void startFolderSync();
+      },
     },
   ),
 );

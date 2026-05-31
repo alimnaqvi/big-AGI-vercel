@@ -74,3 +74,15 @@ model CloudChat {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
+
+//
+// Storage of User Folders (Background Sync)
+//
+model CloudFolder {
+  id              String   @id @default("global_folders")
+  data            Json
+  updatedMs       Float
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}

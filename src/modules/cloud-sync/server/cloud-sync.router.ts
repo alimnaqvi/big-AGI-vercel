@@ -77,4 +77,34 @@ export const cloudSyncRouter = createTRPCRouter({
         return false;
       }
     }),
+
+  getFolders: publicProcedure
+    .query(async () => {
+      if (env.CLOUD_SYNC_ENABLED !== 'true' || !prismaDb) return null;
+      return await prismaDb.cloudFolder.findUnique({
+        where: { id: 'global_folders' },
+      });
+    }),
+
+  upsertFolders: publicProcedure
+    .input(z.object({
+      data: z.any(),
+      updatedMs: z.number(),
+    }))
+    .mutation(async ({ input }) => {
+      if (env.CLOUD_SYNC_ENABLED !== 'true' || !prismaDb) return false;
+      await prismaDb.cloudFolder.upsert({
+        where: { id: 'global_folders' },
+        update: {
+          data: input.data,
+          updatedMs: input.updatedMs,
+        },
+        create: {
+          id: 'global_folders',
+          data: input.data,
+          updatedMs: input.updatedMs,
+        },
+      });
+      return true;
+    }),
 });
