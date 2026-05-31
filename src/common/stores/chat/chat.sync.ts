@@ -39,6 +39,10 @@ export async function startCloudSync() {
 
     for (const localChat of localChats) {
       if (!localChat.updated) continue;
+      
+      // Prevent syncing purely empty/novel chats
+      if (!localChat.messages?.length && !localChat.userTitle && !localChat.autoTitle) continue;
+
       const cloudUpdated = cloudChatsMap.get(localChat.id);
       if (!cloudUpdated || localChat.updated > cloudUpdated) {
         // Local is newer or missing in cloud
@@ -93,6 +97,8 @@ export async function startCloudSync() {
 
 function handleUpload(conversation: DConversation) {
   if (!syncEnabled || conversation._isIncognito) return;
+  // Prevent syncing purely empty/novel chats via local updates
+  if (!conversation.messages?.length && !conversation.userTitle && !conversation.autoTitle) return;
   
   if (uploadQueue.has(conversation.id)) {
     clearTimeout(uploadQueue.get(conversation.id)!.timeout);
