@@ -61,3 +61,16 @@ enum LinkStorageVisibility {
 enum LinkStorageDataType {
   CHAT_V1
 }
+
+//
+// Storage of User Chats (Background Sync)
+//
+model CloudChat {
+  id              String   @id @default(uuid())
+  conversationId  String   @unique
+  data            Json
+  chatUpdatedMs   Float
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}

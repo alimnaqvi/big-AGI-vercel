@@ -2,6 +2,7 @@ import { createTRPCRouter } from './trpc.server';
 
 import { browseRouter } from '~/modules/browse/browse.router';
 import { tradeRouter } from '~/modules/trade/server/trade.router';
+import { cloudSyncRouter } from '~/modules/cloud-sync/server/cloud-sync.router';
 
 /**
  * Cloud rooter, which is geolocated in 1 location and separate from the other routers.
@@ -10,6 +11,7 @@ import { tradeRouter } from '~/modules/trade/server/trade.router';
 export const appRouterCloud = createTRPCRouter({
   browse: browseRouter,
   trade: tradeRouter,
+  cloudSync: cloudSyncRouter,
 });
 
 // export type definition of API

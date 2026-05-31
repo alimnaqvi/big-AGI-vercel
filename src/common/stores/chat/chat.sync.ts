@@ -1,0 +1,133 @@
+import { useChatStore } from './store-chats';
+import { apiAsyncNode } from '~/common/util/trpc.client';
+import { DConversation } from './chat.conversation';
+
+let isSyncing = false;
+let syncEnabled = false;
+
+// Debounced task queue
+const uploadQueue = new Map<string, { conversation: DConversation; timeout: ReturnType<typeof setTimeout> }>();
+
+export async function startCloudSync() {
+  if (isSyncing) return;
+  isSyncing = true;
+
+  try {
+    syncEnabled = await apiAsyncNode.cloudSync.isEnabled.query();
+    if (!syncEnabled) return;
+
+    // 1. Fetch metadata from cloud
+    const cloudChatsMeta = await apiAsyncNode.cloudSync.listChats.query();
+    const cloudChatsMap = new Map(cloudChatsMeta.map(c => [c.conversationId, c.chatUpdatedMs]));
+
+    // 2. Fetch local chats
+    const localChats = useChatStore.getState().conversations;
+    const localChatsMap = new Map(localChats.map(c => [c.id, c.updated]));
+
+    const idsToDownload: string[] = [];
+    const idsToUpload: DConversation[] = [];
+
+    // 3. Compare and decide
+    for (const cloudChat of cloudChatsMeta) {
+      if (!cloudChat.chatUpdatedMs) continue;
+      const localUpdated = localChatsMap.get(cloudChat.conversationId);
+      if (localUpdated === undefined || cloudChat.chatUpdatedMs > localUpdated) {
+        // Cloud is newer or missing locally
+        idsToDownload.push(cloudChat.conversationId);
+      }
+    }
+
+    for (const localChat of localChats) {
+      const cloudUpdated = cloudChatsMap.get(localChat.id);
+      if (cloudUpdated === undefined || localChat.updated > cloudUpdated) {
+        // Local is newer or missing in cloud
+        idsToUpload.push(localChat);
+      }
+    }
+
+    // 4. Download
+    if (idsToDownload.length > 0) {
+      const cloudChats = await apiAsyncNode.cloudSync.getChats.query({ conversationIds: idsToDownload });
+      
+      const { importConversation } = useChatStore.getState();
+      for (const cc of cloudChats) {
+        if (cc.data) {
+          importConversation(cc.data as unknown as DConversation, false);
+        }
+      }
+    }
+
+    // 5. Upload
+    for (const localChat of idsToUpload) {
+      if (localChat._isIncognito) continue; // Don't upload incognito
+      await apiAsyncNode.cloudSync.upsertChat.mutate({
+        conversationId: localChat.id,
+        data: localChat,
+        chatUpdatedMs: localChat.updated
+      });
+    }
+
+    subscribeToLocalChanges();
+  } catch (error) {
+    console.error('Cloud Sync Error during startup', error);
+  } finally {
+    isSyncing = false;
+  }
+}
+
+function handleUpload(conversation: DConversation) {
+  if (!syncEnabled || conversation._isIncognito) return;
+  
+  if (uploadQueue.has(conversation.id)) {
+    clearTimeout(uploadQueue.get(conversation.id)!.timeout);
+  }
+
+  const timeout = setTimeout(async () => {
+    try {
+      await apiAsyncNode.cloudSync.upsertChat.mutate({
+        conversationId: conversation.id,
+        data: conversation,
+        chatUpdatedMs: conversation.updated
+      });
+    } catch (e) {
+      console.error('Cloud sync upload failed for', conversation.id, e);
+    } finally {
+      uploadQueue.delete(conversation.id);
+    }
+  }, 2000);
+
+  uploadQueue.set(conversation.id, { conversation, timeout });
+}
+
+function handleDelete(conversationId: string) {
+  if (!syncEnabled) return;
+  
+  if (uploadQueue.has(conversationId)) {
+    clearTimeout(uploadQueue.get(conversationId)!.timeout);
+    uploadQueue.delete(conversationId);
+  }
+
+  apiAsyncNode.cloudSync.deleteChat.mutate({ conversationId }).catch(e => {
+    console.error('Cloud sync delete failed for', conversationId, e);
+  });
+}
+
+function subscribeToLocalChanges() {
+  useChatStore.subscribe((state, prevState) => {
+    // Detect changes
+    const prevMap = new Map(prevState.conversations.map(c => [c.id, c]));
+    
+    for (const current of state.conversations) {
+      const prev = prevMap.get(current.id);
+      if (!prev || prev.updated !== current.updated) {
+        handleUpload(current);
+      }
+      prevMap.delete(current.id);
+    }
+    
+    // Remaining in prevMap means deleted
+    for (const deletedId of prevMap.keys()) {
+      handleDelete(deletedId);
+    }
+  });
+}

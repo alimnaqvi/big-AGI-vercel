@@ -25,6 +25,9 @@ export const env = createEnv({
    */
   server: {
 
+    // Cloud Chat Sync
+    CLOUD_SYNC_ENABLED: z.string().optional(),
+
     // Backend Postgres, for optional storage via Prisma
     POSTGRES_PRISMA_URL: z.string().optional(),
     POSTGRES_URL_NON_POOLING: z.string().optional(),

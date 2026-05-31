@@ -20,6 +20,8 @@ import { conversationTitle, createDConversation, DConversation, DConversationId,
 import { estimateTokensForFragments } from './chat.tokens';
 import { gcChatImageAssets } from '~/common/stores/chat/chat.gc';
 
+import { startCloudSync } from './chat.sync';
+
 
 /// Conversations Store
 
@@ -533,6 +535,8 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
         //       and synchronously, as it's a rather quick operation (most of the times there won't be any effect).
         void gcChatImageAssets(state.conversations);
 
+        // [Cloud Sync] Check and sync chats if enabled
+        void startCloudSync();
       },
 
     }),
