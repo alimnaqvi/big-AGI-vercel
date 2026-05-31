@@ -31,15 +31,16 @@ export async function startCloudSync() {
     for (const cloudChat of cloudChatsMeta) {
       if (!cloudChat.chatUpdatedMs) continue;
       const localUpdated = localChatsMap.get(cloudChat.conversationId);
-      if (localUpdated === undefined || cloudChat.chatUpdatedMs > localUpdated) {
+      if (!localUpdated || cloudChat.chatUpdatedMs > localUpdated) {
         // Cloud is newer or missing locally
         idsToDownload.push(cloudChat.conversationId);
       }
     }
 
     for (const localChat of localChats) {
+      if (!localChat.updated) continue;
       const cloudUpdated = cloudChatsMap.get(localChat.id);
-      if (cloudUpdated === undefined || localChat.updated > cloudUpdated) {
+      if (!cloudUpdated || localChat.updated > cloudUpdated) {
         // Local is newer or missing in cloud
         idsToUpload.push(localChat);
       }
@@ -63,7 +64,7 @@ export async function startCloudSync() {
       await apiAsyncNode.cloudSync.upsertChat.mutate({
         conversationId: localChat.id,
         data: localChat,
-        chatUpdatedMs: localChat.updated
+        chatUpdatedMs: localChat.updated || 0
       });
     }
 
@@ -87,7 +88,7 @@ function handleUpload(conversation: DConversation) {
       await apiAsyncNode.cloudSync.upsertChat.mutate({
         conversationId: conversation.id,
         data: conversation,
-        chatUpdatedMs: conversation.updated
+        chatUpdatedMs: conversation.updated || 0
       });
     } catch (e) {
       console.error('Cloud sync upload failed for', conversation.id, e);
