@@ -48,12 +48,22 @@ export async function startCloudSync() {
 
     // 4. Download
     if (idsToDownload.length > 0) {
-      const cloudChats = await apiAsyncNode.cloudSync.getChats.query({ conversationIds: idsToDownload });
-      
       const { importConversation } = useChatStore.getState();
-      for (const cc of cloudChats) {
-        if (cc.data) {
-          importConversation(cc.data as unknown as DConversation, false);
+      
+      // Batch downloads to avoid hitting the 5MB query limit 
+      // (P6009 from Prisma when payload is too large)
+      const batchSize = 10;
+      for (let i = 0; i < idsToDownload.length; i += batchSize) {
+        const batchIds = idsToDownload.slice(i, i + batchSize);
+        try {
+          const cloudChats = await apiAsyncNode.cloudSync.getChats.query({ conversationIds: batchIds });
+          for (const cc of cloudChats) {
+            if (cc.data) {
+              importConversation(cc.data as unknown as DConversation, false);
+            }
+          }
+        } catch (error) {
+          console.error(`Cloud Sync Error downloading batch ${i}-${i + batchSize}`, error);
         }
       }
     }
