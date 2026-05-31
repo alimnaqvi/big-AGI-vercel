@@ -61,11 +61,16 @@ export async function startCloudSync() {
     // 5. Upload
     for (const localChat of idsToUpload) {
       if (localChat._isIncognito) continue; // Don't upload incognito
-      await apiAsyncNode.cloudSync.upsertChat.mutate({
-        conversationId: localChat.id,
-        data: localChat,
-        chatUpdatedMs: localChat.updated || 0
-      });
+      try {
+        const sanitizedChat = JSON.parse(JSON.stringify(localChat).replace(/[\u0000]/g, ''));
+        await apiAsyncNode.cloudSync.upsertChat.mutate({
+          conversationId: localChat.id,
+          data: sanitizedChat,
+          chatUpdatedMs: localChat.updated || 0
+        });
+      } catch (error) {
+        console.error('Cloud Sync Error uploading chat', localChat.id, error);
+      }
     }
 
     subscribeToLocalChanges();
@@ -85,9 +90,10 @@ function handleUpload(conversation: DConversation) {
 
   const timeout = setTimeout(async () => {
     try {
+      const sanitizedChat = JSON.parse(JSON.stringify(conversation).replace(/[\u0000]/g, ''));
       await apiAsyncNode.cloudSync.upsertChat.mutate({
         conversationId: conversation.id,
-        data: conversation,
+        data: sanitizedChat,
         chatUpdatedMs: conversation.updated || 0
       });
     } catch (e) {
