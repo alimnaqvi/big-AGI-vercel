@@ -31,8 +31,10 @@ export async function startCloudSync() {
     for (const cloudChat of cloudChatsMeta) {
       if (!cloudChat.chatUpdatedMs) continue;
       const localUpdated = localChatsMap.get(cloudChat.conversationId);
-      if (!localUpdated || cloudChat.chatUpdatedMs > localUpdated) {
+      if (!localUpdated) {
         // Cloud is newer or missing locally
+        idsToDownload.push(cloudChat.conversationId);
+      } else if (cloudChat.chatUpdatedMs > localUpdated) {
         idsToDownload.push(cloudChat.conversationId);
       }
     }
