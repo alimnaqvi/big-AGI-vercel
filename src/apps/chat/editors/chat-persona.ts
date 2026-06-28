@@ -85,7 +85,7 @@ export async function runPersonaOnConversationHead(
       const includeFragments = !!fragments?.length || messageComplete || !messageOverwrite.pendingIncomplete;
 
       // update the message
-      cHandler.messageEdit(assistantMessageId, { ...(includeFragments && { fragments }), ...rest }, messageComplete, false);
+      cHandler.messageEdit(assistantMessageId, { ...(includeFragments && { fragments }), ...rest }, messageComplete, messageComplete);
 
       // if requested, speak the message
       autoSpeaker?.handleMessage(messageOverwrite, messageComplete);
@@ -98,7 +98,7 @@ export async function runPersonaOnConversationHead(
   // final message update (needed only in case of error)
   const lastDMessage = messageStatus.lastDMessage;
   if (messageStatus.outcome === 'failed')
-    cHandler.messageEdit(assistantMessageId, lastDMessage, true, false);
+    cHandler.messageEdit(assistantMessageId, lastDMessage, true, true);
 
   // special case: if the last message was aborted and had no content, delete it
   if (messageWasInterruptedAtStart(lastDMessage)) {
