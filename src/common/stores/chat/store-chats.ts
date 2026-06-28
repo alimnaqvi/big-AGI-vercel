@@ -279,6 +279,7 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
 
           return {
             messages: updatedMessages,
+            updated: Date.now(),
             // No need to update the following as void fragments don't contribute
             // tokenCount: updateMessagesTokenCounts(updatedMessages, true, 'historyStripThinking'),
             // updated: Date.now(),
@@ -421,6 +422,7 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
         _get()._editConversation(conversationId,
           {
             autoTitle,
+            updated: Date.now(),
           }),
 
       setUserTitle: (conversationId: DConversationId, userTitle: string) =>
@@ -428,6 +430,7 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
           {
             userTitle,
             ...(!userTitle && { autoTitle: undefined }), // clear autotitle when clearing usertitle
+            updated: Date.now(),
           }),
 
       title: (conversationId: DConversationId): string | undefined => {
