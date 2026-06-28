@@ -80,6 +80,9 @@ interface AppChatStore {
   showSystemMessages: boolean;
   setShowSystemMessages: (showSystemMessages: boolean) => void;
 
+  showToolbarNavigation: boolean;
+  toggleShowToolbarNavigation: () => void;
+
   // other chat-specific configuration
 
   notificationEnabledModelIds: DLLMId[];
@@ -156,6 +159,10 @@ const useAppChatStore = create<AppChatStore>()(persist(
     showSystemMessages: false,
     setShowSystemMessages: (showSystemMessages: boolean) => _set({ showSystemMessages }),
 
+    // on by default; no setting UI on `main` (the breadcrumb shows the chat title in the top bar); `dev` adds the toggle
+    showToolbarNavigation: true,
+    toggleShowToolbarNavigation: () => _set(({ showToolbarNavigation }) => ({ showToolbarNavigation: !showToolbarNavigation })),
+
     // Other chat-specific configuration
 
     notificationEnabledModelIds: [],
@@ -170,7 +177,7 @@ const useAppChatStore = create<AppChatStore>()(persist(
 
   }), {
     name: 'app-app-chat',
-    version: 1,
+    version: 3, // note: v2 is a `dev`-only progressive-disclosure migration (panels not present on `main`); jump 1 -> 3 to stay aligned
 
     onRehydrateStorage: () => (state) => {
       if (!state) return;
@@ -186,6 +193,11 @@ const useAppChatStore = create<AppChatStore>()(persist(
       // 0 -> 1: autoTitleChat was off by mistake - turn it on [Remove past Dec 1, 2023]
       if (state && fromVersion < 1)
         state.autoTitleChat = true;
+
+      // 1 -> 3: show the conversation title in the top bar by default (v2 is a `dev`-only step)
+      if (state && fromVersion < 3)
+        state.showToolbarNavigation = true;
+
       return state;
     },
   },
@@ -269,6 +281,9 @@ export const getChatShowSystemMessages = (): boolean =>
 
 export const useChatShowSystemMessages = (): [boolean, (showSystemMessages: boolean) => void] =>
   useAppChatStore(useShallow(state => [state.showSystemMessages, state.setShowSystemMessages]));
+
+export const useChatShowToolbarNavigation = (): boolean =>
+  useAppChatStore(state => state.showToolbarNavigation);
 
 export const getIsNotificationEnabledForModel = (modelId: DLLMId): boolean =>
   useAppChatStore.getState().isNotificationEnabledForModel(modelId);

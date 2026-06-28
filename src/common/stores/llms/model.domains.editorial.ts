@@ -55,6 +55,11 @@ type _EditorialDefaultsTable = {
 export const EditorialDefaults = {
 
   primaryChat: [
+    // TEMP 2026-06-16: Fable 5 held - not recommended to new users via Auto picks. Uncomment to restore.
+    // { vendor: 'anthropic',  modelId: 'claude-fable-5' },
+    // { vendor: 'bedrock',    modelId: 'us.anthropic.claude-fable-5' },
+    // { vendor: 'bedrock',    modelId: 'global.anthropic.claude-fable-5' },
+    // { vendor: 'openrouter', modelId: 'anthropic/claude-fable-5' },
     { vendor: 'anthropic',  modelId: 'claude-opus-4-8' },
     { vendor: 'bedrock',    modelId: 'us.anthropic.claude-opus-4-8-thinking' },
     { vendor: 'bedrock',    modelId: 'global.anthropic.claude-opus-4-8-thinking' },
@@ -71,7 +76,7 @@ export const EditorialDefaults = {
     { vendor: 'anthropic',  modelId: 'claude-sonnet-4-6' },
     { vendor: 'xai',        modelId: 'grok-4.3' },
     { vendor: 'moonshot',   modelId: 'kimi-k2.6' },
-    { vendor: 'zai',        modelId: 'glm-5' },
+    { vendor: 'zai',        modelId: 'glm-5.2' },
     { vendor: 'deepseek',   modelId: 'deepseek-v4-pro' },
   ],
 
@@ -88,7 +93,7 @@ export const EditorialDefaults = {
     { vendor: 'anthropic',  modelId: 'claude-opus-4-8' },
     { vendor: 'anthropic',  modelId: 'claude-opus-4-7' },
     { vendor: 'xai',        modelId: 'grok-build-0.1' },
-    { vendor: 'zai',        modelId: 'glm-5-code' },
+    { vendor: 'zai',        modelId: 'glm-5.2' },
     { vendor: 'zai',        modelId: 'glm-5' },
     { vendor: 'moonshot',   modelId: 'kimi-k2.6' },
     { vendor: 'deepseek',   modelId: 'deepseek-v4-flash' },
@@ -108,7 +113,7 @@ export const EditorialDefaults = {
     { vendor: 'moonshot',   modelId: 'kimi-k2.5' },
     { vendor: 'xai',        modelId: 'grok-4.20-0309-non-reasoning' },
     { vendor: 'xai',        modelId: 'grok-4.3' },
-    { vendor: 'zai',        modelId: 'glm-4.7-flash' },
+    { vendor: 'zai',        modelId: 'glm-5.2' },
     { vendor: 'deepseek',   modelId: 'deepseek-v4-flash' },
   ],
 
@@ -138,8 +143,11 @@ export const EditorialDefaults = {
 export function llmsEditorialPickForDomain(
   domainId: DModelDomainId,
   filteredLlms: ReadonlyArray<DLLM>,
+  fallbackEditorialDomainId?: DModelDomainId, // optional secondary domain to check when the primary domain has no picks or no matches
 ): DLLMId | undefined {
-  const entries = EditorialDefaults[domainId];
+  const entries = EditorialDefaults[domainId]?.length ? EditorialDefaults[domainId]
+    : fallbackEditorialDomainId && EditorialDefaults[fallbackEditorialDomainId]?.length ? EditorialDefaults[fallbackEditorialDomainId]
+      : undefined;
   if (!entries) return undefined;
   for (const { vendor, modelId } of entries) {
     const hit = filteredLlms.find(llm => llm.vId === vendor && _editorialMatch(llm, modelId));

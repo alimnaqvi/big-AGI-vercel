@@ -224,13 +224,20 @@ export function LLMParametersEditor(props: {
     , [props.parameterSpecs]);
 
 
-  // effort options: one memo for all vendors, filtered to model's allowed values
-  const { antEffortOptions, gemEffortOptions, oaiEffortOptions, miscEffortOptions } = React.useMemo(() => ({
-    antEffortOptions: llmParametersFilterEffortOptions(_antEffortOptions, modelParamSpec['llmVndAntEffort'], 'llmVndAntEffort'),
-    gemEffortOptions: llmParametersFilterEffortOptions(_gemEffortOptions, modelParamSpec['llmVndGemEffort'], 'llmVndGemEffort'),
-    oaiEffortOptions: llmParametersFilterEffortOptions(_oaiEffortOptions, modelParamSpec['llmVndOaiEffort'], 'llmVndOaiEffort'),
-    miscEffortOptions: llmParametersFilterEffortOptions(_miscEffortOptions, modelParamSpec['llmVndMiscEffort'], 'llmVndMiscEffort'),
-  }), [modelParamSpec]);
+  // enum options: one memo for all vendors, filtered to each model's allowed values (via parameterSpec.enumValues)
+  const { antEffortOptions, gemEffortOptions, oaiEffortOptions, miscEffortOptions, oaiWebSearchOptions } = React.useMemo(() => {
+    // web search: filter to the model's allowed levels; when restricted to a single level (e.g. Sakana's
+    // bare on/off web_search), relabel that lone level as a plain "On" (the "Off" entry is kept as-is).
+    const ws = llmParametersFilterEffortOptions(_webSearchContextOptions, modelParamSpec['llmVndOaiWebSearchContext'], 'llmVndOaiWebSearchContext');
+    const wsOnOff = ws?.filter(o => o.value !== _UNSPECIFIED).length === 1;
+    return {
+      antEffortOptions: llmParametersFilterEffortOptions(_antEffortOptions, modelParamSpec['llmVndAntEffort'], 'llmVndAntEffort'),
+      gemEffortOptions: llmParametersFilterEffortOptions(_gemEffortOptions, modelParamSpec['llmVndGemEffort'], 'llmVndGemEffort'),
+      oaiEffortOptions: llmParametersFilterEffortOptions(_oaiEffortOptions, modelParamSpec['llmVndOaiEffort'], 'llmVndOaiEffort'),
+      miscEffortOptions: llmParametersFilterEffortOptions(_miscEffortOptions, modelParamSpec['llmVndMiscEffort'], 'llmVndMiscEffort'),
+      oaiWebSearchOptions: ws?.map(o => (wsOnOff && o.value !== _UNSPECIFIED) ? { ...o, label: 'On' } : o) ?? null,
+    };
+  }, [modelParamSpec]);
 
 
   // current values: { ...fallback, ...baseline, ...user }
@@ -240,6 +247,7 @@ export function LLMParametersEditor(props: {
     llmTemperature, // null: no temperature, number: temperature value, undefined: shall not happen, we treat is similarly to null
     llmForceNoStream,
     llmVndAnt1MContext,
+    llmVndAntCodeSandbox,
     llmVndAntEffort,
     llmVndAntInfSpeed,
     llmVndAntSkills,
@@ -279,7 +287,10 @@ export function LLMParametersEditor(props: {
 
   // state (here because the initial state depends on props)
   const tempAboveOne = llmTemperature !== null && llmTemperature !== undefined && llmTemperature > 1;
-  const [overheat, setOverheat] = React.useState(tempAboveOne);
+  const [overheatToggle, setOverheat] = React.useState(tempAboveOne);
+  // derive overheat from both the local toggle and the live value, so a temperature > 1 set elsewhere
+  // (e.g. the Model Configuration dialog or the chat-side panel) reactively unlocks 0..2 in every editor instance
+  const overheat = overheatToggle || tempAboveOne;
   const showOverheatButton = overheat || llmTemperature === 1 || tempAboveOne;
 
 
@@ -292,8 +303,9 @@ export function LLMParametersEditor(props: {
     if (overheat && tempAboveOne)
       onChangeParameter({ llmTemperature: 1 });
 
-    // toggle overheating
-    setOverheat(on => !on);
+    // toggle overheating - flip the derived value (not the raw toggle), so disabling works
+    // even when overheat is on only because the live temperature > 1 was set elsewhere
+    setOverheat(!overheat);
   }, [onChangeParameter, overheat, tempAboveOne]);
 
 
@@ -549,6 +561,24 @@ export function LLMParametersEditor(props: {
       />
     )}
 
+    {showParam('llmVndAntCodeSandbox') && (
+      <FormSwitchControl
+        title='Code Sandbox'
+        description={llmVndAntSkills ? 'On (via Skills)' : 'Hosted-container sandbox'}
+        tooltip='Run code in a server-side hosted-container sandbox for data analysis, file processing, and charts. Document Skills and programmatic tool calls enable this automatically. Can be combined with Web Search/Fetch (free when used together).'
+        disabled={!!llmVndAntSkills} // Skills require the container, so it is implied-on and locked
+        checked={!!llmVndAntCodeSandbox || !!llmVndAntSkills}
+        onChange={checked => {
+          if (!checked) onRemoveParameter('llmVndAntCodeSandbox');
+          else onChangeParameter({ llmVndAntCodeSandbox: 'auto' });
+        }}
+      />
+    )}
+
+    {showParam('llmVndAntSkills') && (
+      <AnthropicSkillsConfig llmVndAntSkills={llmVndAntSkills} onChangeParameter={onChangeParameter} onRemoveParameter={onRemoveParameter} />
+    )}
+
     {showParam('llmVndAnt1MContext') && (
       <FormSwitchControl
         title='1M Context Window (Beta)'
@@ -574,10 +604,6 @@ export function LLMParametersEditor(props: {
           else if (antInfSpeedTier) onChangeParameter({ llmVndAntInfSpeed: antInfSpeedTier });
         }}
       />
-    )}
-
-    {showParam('llmVndAntSkills') && (
-      <AnthropicSkillsConfig llmVndAntSkills={llmVndAntSkills} onChangeParameter={onChangeParameter} onRemoveParameter={onRemoveParameter} />
     )}
 
 
@@ -671,7 +697,7 @@ export function LLMParametersEditor(props: {
 
     {showParam('llmVndGeminiCodeExecution') && (
       <FormSelectControl
-        title='Code Execution'
+        title='Code Sandbox'
         tooltip='Enable automatic Python code generation and execution by the model'
         value={llmVndGeminiCodeExecution ?? _UNSPECIFIED}
         onChange={(value) => {
@@ -735,7 +761,7 @@ export function LLMParametersEditor(props: {
           else
             onChangeParameter({ llmVndOaiWebSearchContext: value });
         }}
-        options={_webSearchContextOptions}
+        options={oaiWebSearchOptions ?? _webSearchContextOptions}
       />
     )}
 
@@ -791,7 +817,7 @@ export function LLMParametersEditor(props: {
 
     {showParam('llmVndOaiCodeInterpreter') && (
       <FormSelectControl
-        title='Code Interpreter'
+        title='Code Sandbox'
         tooltip='Enable Python code execution in a sandboxed container. Costs $0.03 per container (expires after 20 minutes of inactivity).'
         value={llmVndOaiCodeInterpreter ?? _UNSPECIFIED}
         onChange={(value) => {
@@ -882,7 +908,7 @@ export function LLMParametersEditor(props: {
 
     {showParam('llmVndXaiCodeExecution') && (
       <FormSelectControl
-        title='Run Code'
+        title='Code Sandbox'
         value={llmVndXaiCodeExecution ?? _UNSPECIFIED}
         onChange={(value) => {
           if (value === _UNSPECIFIED || !value || value === 'off') onRemoveParameter('llmVndXaiCodeExecution');

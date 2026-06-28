@@ -1,7 +1,7 @@
 import { LLM_IF_OAI_Chat, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
 
 import type { ModelDescriptionSchema } from '../../llm.server.types';
-import { fromManualMapping, llmsDefineManualMappings } from '../../models.mappings';
+import { formatPubDate, fromManualMapping, llmsDefineManualMappings } from '../../models.mappings';
 
 // --- TogetherAI Model ID inference (auto-derived from _knownTogetherAIChatModels) ---
 export type LlmsTogetherAIModelId = typeof _knownTogetherAIChatModels[number]['idPrefix'];
@@ -78,10 +78,13 @@ export function togetherAIModelsToModelDescriptions(wireModels: unknown): ModelD
           };
       }
       const interfaces = [LLM_IF_OAI_Chat];
-      if (model.id.toLowerCase().includes('vision') || model.id.toLowerCase().includes('-vl'))
+      // vision detection by id string (Together's API exposes no modality field): 'vision'/'-vl' plus
+      // families that are natively multimodal across all variants (Llama 4 Scout/Maverick, Pixtral)
+      const lcId = model.id.toLowerCase();
+      if (lcId.includes('vision') || lcId.includes('-vl') || lcId.includes('llama-4') || lcId.includes('pixtral'))
         interfaces.push(LLM_IF_OAI_Vision);
 
-      return fromManualMapping(_knownTogetherAIChatModels, model.id, model.created, undefined, {
+      const md = fromManualMapping(_knownTogetherAIChatModels, model.id, model.created, undefined, {
         idPrefix: model.id,
         label,
         description,
@@ -93,6 +96,14 @@ export function togetherAIModelsToModelDescriptions(wireModels: unknown): ModelD
         chatPrice,
         hidden: false,
       });
+
+      // pubDate fallback: TogetherAI's 'created' is verified real per-model release/index dates (225 unique,
+      // 2023-2026 spread, not a constant; ~34 models omit it and simply get no badge), so derive a day-precision
+      // pubDate to drive the "new" badge for models without an editorial pubDate. Editorial pubDate always wins.
+      if (md.pubDate === undefined && md.created)
+        md.pubDate = formatPubDate(md.created);
+
+      return md;
     })
 
     .sort(togetherAIModelsSort);
