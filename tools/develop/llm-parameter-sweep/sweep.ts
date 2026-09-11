@@ -61,9 +61,24 @@ const SWEEP_DEFINITIONS = [
     description: 'OpenAI reasoning_effort values',
     applicability: { type: 'dialects', dialects: ['openai', 'azure', 'openrouter'] },
     applyToModel: (value) => ({ reasoningEffort: value }),
-    values: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh' /*, 'max'*/ /* OpenRouter-only? */] satisfies AixAPI_Model['reasoningEffort'][],
+    values: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max' /* [2026-07-09] GPT-5.6+ */] satisfies AixAPI_Model['reasoningEffort'][],
     neuteredValues: ['medium'], // medium is the default, so only-medium means no real support
     mode: 'enumerate',
+  }),
+
+  // OpenAI: reasoning mode (Responses API, GPT-5.6+)
+  defineSweep({
+    name: 'oai-reasoning-mode',
+    description: 'OpenAI reasoning.mode values (Responses API + OpenRouter tunnel, GPT-5.6+)',
+    applicability: { type: 'dialects', dialects: ['openai', 'openrouter'] },
+    applyToModel: (value) => ({ vndOaiReasoningMode: value }),
+    values: ['standard', 'pro'] satisfies AixAPI_Model['vndOaiReasoningMode'][],
+    neuteredValues: ['standard'], // standard is the default, so only-standard means no real support
+    mode: 'enumerate',
+    // [2026-07-10] reasoning.mode only exists on the Responses API: the Chat Completions adapter does not carry it,
+    // so a CC-dispatched probe would 200 without the API ever seeing the param (false pass on gpt-4o/4.1/3.5 etc.)
+    preflightFail: (body, value) => body?.reasoning?.mode === value ? null
+      : `not carried on wire: reasoning.mode=${body?.reasoning?.mode ?? '(unset)'} (Responses-only param)`,
   }),
 
   // OpenAI: verbosity (Responses API)
@@ -178,6 +193,27 @@ const SWEEP_DEFINITIONS = [
     mode: 'enumerate',
   }),
 
+  // Meta AI: reasoning effort (Responses API)
+  // Muse Spark: minimal/low/medium/high/xhigh ('none' 400s on every Spark model, 'max' announced for 1.3 but not served yet - 2026-09-02)
+  defineSweep({
+    name: 'metaai-reasoning-effort',
+    description: 'Meta reasoning.effort values',
+    applicability: { type: 'dialects', dialects: ['metaai'] },
+    applyToModel: (value) => ({ reasoningEffort: value }),
+    values: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] satisfies AixAPI_Model['reasoningEffort'][],
+    mode: 'enumerate',
+  }),
+
+  // Meta AI: web search context (the OpenAI-shaped hosted web_search tool; $2.50 / 1K queries)
+  defineSweep({
+    name: 'metaai-web-search',
+    description: 'Meta web_search search_context_size values',
+    applicability: { type: 'dialects', dialects: ['metaai'] },
+    applyToModel: (value) => ({ vndOaiWebSearchContext: value }),
+    values: ['low', 'medium', 'high'] satisfies AixAPI_Model['vndOaiWebSearchContext'][],
+    mode: 'enumerate',
+  }),
+
 ] as const satisfies SweepDefinition<any>[];
 
 
@@ -267,9 +303,14 @@ const TOOL_PROBE_DEFINITIONS: ToolProbeDefinition[] = [
     validateArgs: (args) => typeof args?.location === 'string' && args.location.length > 0,
     // [2026-06-09] 'required' must reflect raw API support for forced tool use: on adaptive-only Anthropic
     // models (Fable/Mythos 5) the adapter downgrades 'any' -> 'auto' + system hint, which would pass here.
-    preflightFail: (body, dialect) => dialect !== 'anthropic' ? null
-      : body?.tool_choice?.type === 'any' ? null
-        : `coerced on wire: tool_choice=${JSON.stringify(body?.tool_choice ?? null)} (expected type 'any')`,
+    // [2026-09-02] same for Meta (tool_choice accepts only 'auto', the Responses adapter degrades). Judged only when
+    // the body carries a `tool_choice` (Anthropic object / OpenAI-family string); Gemini's tool_config is not inspected.
+    preflightFail: (body) => {
+      const tc = body?.tool_choice;
+      if (tc === undefined || tc === null) return null;
+      const forced = tc?.type === 'any' || tc?.type === 'function' || tc === 'required';
+      return forced ? null : `coerced on wire: tool_choice=${JSON.stringify(tc)} (expected a forced tool choice)`;
+    },
   },
   {
     name: 'fn',
@@ -316,6 +357,16 @@ type SweepValue = string | number | boolean | null;
 function defineSweep<const TValue>(definition: SweepDefinition<TValue>) {
   return definition;
 }
+
+/**
+ * [2026-07-11] Default per-dialect model filters, applied when NEITHER the vendor config nor the CLI provides one.
+ * Keeps ad-hoc scans fast and focused on current-gen models (prefixes: gpt-6 included for forward-compat; the
+ * gpt-4/gpt-3.5 era is excluded). Any explicit config `modelFilter` or CLI `--model-filter` takes precedence.
+ */
+const DEFAULT_VENDOR_MODEL_FILTERS: Record<string, string[]> = {
+  openai: ['gpt-5', 'gpt-6', 'o'],
+  openrouter: ['anthropic/claude', 'openai/gpt-5', 'google/gemini'],
+};
 
 /** Check if passing values are neutered (only default/no-op values passed) */
 function isSweepNeutered(sweepName: string, passingValues: SweepValue[]): boolean {
@@ -457,6 +508,7 @@ class SweepCollectorTransmitter implements IParticleTransmitter {
   appendAutoText_weak(textChunk: string): void { this.text += textChunk; }
   appendAudioInline(_mimeType: string, _base64Data: string, _label: string, _generator: string, _durationMs: number): void { /* no-op */ }
   appendImageInline(_mimeType: string, _base64Data: string, _label: string, _generator: string, _prompt: string): void { /* no-op */ }
+  appendVideoInline(_mimeType: string, _base64Data: string, _label: string, _generator: string): void { /* no-op */ }
   appendHostedResource(_hres: any): void { /* no-op */ }
   startFunctionCallInvocation(id: string | null, functionName: string, _expectedArgsFmt: 'incr_str' | 'json_object', args: string | object | null): void {
     this.fnInvocationCount++;
@@ -601,6 +653,7 @@ async function testParameterValue(
       model,
       chatGenerate,
       false, // streaming = false
+      undefined, // sessionAffinityId = none
       false, // enableResumability = false
     );
   } catch (error: any) {
@@ -773,7 +826,7 @@ async function _dispatchAndCollect(
   let dispatch: ChatGenerateDispatch | undefined;
 
   try {
-    dispatch = await createChatGenerateDispatch(access, model, chatGenerate, false, false);
+    dispatch = await createChatGenerateDispatch(access, model, chatGenerate, false, undefined /* sessionAffinityId */, false);
   } catch (error: any) {
     const errorMessage = error?.message ? String(error.message).slice(0, 300) : String(error).slice(0, 300);
     return {
@@ -1201,8 +1254,15 @@ function loadExistingDialectResults(filePath: string): DialectReultsByModel | nu
   }
 }
 
-function saveDialectResults(dialect: string, dialectResults: DialectReultsByModel, evaluatedSweeps: string[], modelFilter?: string, mergeModels?: boolean): void {
+function saveDialectResults(dialect: string, dialectResults: DialectReultsByModel, evaluatedSweeps: string[], modelFilter?: string, mergeModels?: boolean, partialSweeps?: boolean): void {
   const filePath = getResultsFilePath(dialect);
+
+  // [2026-07-11] Filtered scans never overwrite: a partial model set would clobber the full results file - and the
+  // default vendor filters make every standalone scan partial. Overwrite remains for full unfiltered scans only.
+  if (!mergeModels && modelFilter && fs.existsSync(filePath)) {
+    console.log(`${COLORS.yellow}Filtered scan over an existing results file -> auto-enabling --merge-models (run unfiltered to rebuild from scratch)${COLORS.reset}`);
+    mergeModels = true;
+  }
 
   // When --merge-models, shallow-merge new model entries into existing file
   if (mergeModels) {
@@ -1212,9 +1272,12 @@ function saveDialectResults(dialect: string, dialectResults: DialectReultsByMode
       const updatedCount = newModelIds.filter(id => id in existing).length;
       const addedCount = newModelIds.length - updatedCount;
       // Merge preserving scan order: new models first (in scan order), then remaining old models
+      // [2026-07-11] Sweep-filtered scans DEEP-merge per model (keys knowingly partial: replacing the whole entry
+      // silently dropped keys the run didn't probe - how 'fn' data was lost); full-sweep scans replace the whole
+      // entry, so capabilities a model genuinely lost don't linger as stale keys.
       const merged: DialectReultsByModel = {};
       for (const id of newModelIds)
-        merged[id] = dialectResults[id];
+        merged[id] = partialSweeps ? { ...existing[id], ...dialectResults[id] } : dialectResults[id];
       for (const id of Object.keys(existing)) {
         if (!(id in merged))
           merged[id] = existing[id];
@@ -1275,8 +1338,12 @@ function vendorResultToDialectResults(vendorResult: VendorSweepResult): DialectR
 
     // Extract passing values for each sweep (skip if none passed)
     for (const [sweepName, sweepResults] of bySweep) {
+      // [2026-07-10] For value sweeps, 'truncated' (out-of-tokens) counts as acceptance: the API took the value and
+      // generated past our token cap - excluding it punched fake holes in ranges (e.g. temperature [0,0.5,2] missing
+      // 1/1.5). Capability probes (fn) are excluded: a truncated roundtrip is genuinely inconclusive.
+      const truncatedIsPass = SWEEP_DEFINITIONS.some(s => s.name === sweepName);
       const passingValues = sweepResults
-        .filter(r => r.outcome === 'pass')
+        .filter(r => r.outcome === 'pass' || (truncatedIsPass && r.outcome === 'truncated'))
         .map(r => r.paramValue);
       if (passingValues.length === 0)
         continue;
@@ -1330,7 +1397,7 @@ function vendorResultToDialectResults(vendorResult: VendorSweepResult): DialectR
   return dialectResults;
 }
 
-function saveAllResults(allResults: VendorSweepResult[], mergeModels?: boolean): void {
+function saveAllResults(allResults: VendorSweepResult[], mergeModels?: boolean, partialSweeps?: boolean): void {
   for (const vendorResult of allResults) {
     if (vendorResult.models.length === 0) continue;
     // Collect all evaluated sweep names for this dialect
@@ -1341,7 +1408,7 @@ function saveAllResults(allResults: VendorSweepResult[], mergeModels?: boolean):
       }
     }
     const dialectResults = vendorResultToDialectResults(vendorResult);
-    saveDialectResults(vendorResult.dialect, dialectResults, [...evaluatedSweeps], vendorResult.modelFilter, mergeModels);
+    saveDialectResults(vendorResult.dialect, dialectResults, [...evaluatedSweeps], vendorResult.modelFilter, mergeModels, partialSweeps);
   }
 }
 
@@ -1388,6 +1455,7 @@ function createSingleVendorConfig(dialect: string, key: string, host?: string): 
     case 'groq':
     case 'lmstudio':
     case 'localai':
+    case 'metaai':
     case 'mistral':
     case 'moonshot':
     case 'openrouter':
@@ -1399,7 +1467,6 @@ function createSingleVendorConfig(dialect: string, key: string, host?: string): 
         oaiKey: key,
         oaiOrg: '',
         oaiHost: host || '',
-        heliKey: '',
       } as any;
       break;
 
@@ -1408,7 +1475,6 @@ function createSingleVendorConfig(dialect: string, key: string, host?: string): 
         dialect: 'anthropic',
         anthropicKey: key,
         anthropicHost: host || null,
-        heliconeKey: null,
       } as any;
       break;
 
@@ -1473,7 +1539,7 @@ ${COLORS.bright}Config file format (SweepConfig):${COLORS.reset}
     "maxTokens": 128,
     "vendors": {
       "openai": {
-        "access": { "dialect": "openai", "oaiKey": "sk-...", "oaiOrg": "", "oaiHost": "", "heliKey": "" },
+        "access": { "dialect": "openai", "oaiKey": "sk-...", "oaiOrg": "", "oaiHost": "" },
         "sweeps": ["temperature", "oai-reasoning-effort", "oai-verbosity"],
         "modelFilter": "gpt-4o",
         "baseModelOverrides": {}
@@ -1624,7 +1690,9 @@ async function runSweep(
   options: CliOptions,
 ): Promise<VendorSweepResult[]> {
   const allResults: VendorSweepResult[] = [];
-  const maxTokens = sweepConfig.maxTokens ?? 128;
+  // [2026-07-11] fallback raised 128 -> 1024: reasoning models burned a 128-token budget before completing probes,
+  // truncating fn (capability lost on merge). For fn-grade scans prefer the config's per-vendor baseModelOverrides (4096).
+  const maxTokens = sweepConfig.maxTokens ?? 1024;
   const globalDelay = sweepConfig.delayMs ?? options.delay;
 
   for (const [vendorName, vendorConfig] of Object.entries(sweepConfig.vendors)) {
@@ -1680,7 +1748,9 @@ async function runSweep(
     }
 
     // 3. Filter models by: vendor config modelFilter (prefix match), then CLI --model-filter (regex)
-    const vendorModelFilter = vendorConfig.modelFilter;
+    // No config filter AND no CLI filter -> per-dialect default (e.g. openai: current-gen only, no gpt-4/3.5 era)
+    const vendorModelFilter = vendorConfig.modelFilter
+      ?? (!options.modelFilter ? DEFAULT_VENDOR_MODEL_FILTERS[access.dialect] : undefined);
     if (vendorModelFilter) {
       const prefixes = Array.isArray(vendorModelFilter) ? vendorModelFilter : [vendorModelFilter];
       models = models.filter(m => prefixes.some(p => m.id.startsWith(p)));
@@ -1944,7 +2014,7 @@ async function main(): Promise<void> {
   // Summary and save results
   if (!options.dryRun && results.some(v => v.models.length > 0)) {
     printSweepSummary(results);
-    saveAllResults(results, options.mergeModels);
+    saveAllResults(results, options.mergeModels, !!options.sweepFilter);
   }
 
   console.log(`${COLORS.dim}Done.${COLORS.reset}`);

@@ -4,8 +4,9 @@
  * This module only imports zod for schema definition and provides access logic
  * that works identically on server and client environments.
  *
- * Supports 15 OpenAI-compatible dialects: alibaba, azure, deepseek, groq, lmstudio,
- * localai, mistral, moonshot, openai, openrouter, perplexity, sakanaai, togetherai, xai, zai
+ * Supports 20 OpenAI-compatible dialects: alibaba, azure, cerebras, cohere, deepseek, groq, lmstudio,
+ * localai, metaai, mistral, modular, moonshot, nvidianim, openai, openrouter, perplexity, sakanaai,
+ * togetherai, xai, zai
  */
 
 import * as z from 'zod/v4';
@@ -21,13 +22,18 @@ import { llmsFixupHost, llmsHostnameMatches } from '../../shared/llm.isomorphic'
 
 // configuration
 const DEFAULT_ALIBABA_HOST = 'https://dashscope-intl.aliyuncs.com/compatible-mode';
+const DEFAULT_CEREBRAS_HOST = 'https://api.cerebras.ai';
+const DEFAULT_COHERE_HOST = 'https://api.cohere.ai/compatibility';
 const DEFAULT_DEEPSEEK_HOST = 'https://api.deepseek.com';
 const DEFAULT_GROQ_HOST = 'https://api.groq.com/openai';
-const DEFAULT_HELICONE_OPENAI_HOST = 'oai.hconeai.com';
 const DEFAULT_LMSTUDIO_HOST = 'http://localhost:1234';
 const DEFAULT_LOCALAI_HOST = 'http://127.0.0.1:8080';
+const DEFAULT_METAAI_HOST = 'https://api.meta.ai'; // Meta AI (the Meta Model API) - Responses, Chat Completions and Messages under /v1
 const DEFAULT_MISTRAL_HOST = 'https://api.mistral.ai';
+const DEFAULT_MODULAR_HOST = 'https://api.modular.com'; // Modular Cloud - host is user-overridable to point at a self-hosted MAX server
 const DEFAULT_MOONSHOT_HOST = 'https://api.moonshot.ai';
+const DEFAULT_MOONSHOT_CODING_HOST = 'https://api.kimi.com/coding'; // Kimi Code subscription ('sk-kimi-' keys)
+const DEFAULT_NVIDIANIM_HOST = 'https://integrate.api.nvidia.com'; // NVIDIA API Catalog (build.nvidia.com) - host is user-overridable to point at a local NIM/vLLM
 const DEFAULT_OPENAI_HOST = 'api.openai.com';
 const DEFAULT_OPENROUTER_HOST = 'https://openrouter.ai/api';
 const DEFAULT_PERPLEXITY_HOST = 'https://api.perplexity.ai';
@@ -59,6 +65,12 @@ export const OPENAI_API_PATHS = {
   xaiLanguageModels: '/v1/language-models',
 } as const;
 
+// -- OpenRouter-specific API Paths --
+
+export const OPENROUTER_API_PATHS = {
+  images: '/v1/images', // dedicated image generation endpoint, not OpenAI-compatible
+} as const;
+
 
 /** Select a random key from a comma-separated list of API keys, used to load balance. */
 export function llmsRandomKeyFromMultiKey(multiKeyString: string): string {
@@ -83,15 +95,14 @@ export type OpenAIDialects = OpenAIAccessSchema['dialect'];
 export type OpenAIAccessSchema = z.infer<typeof openAIAccessSchema>;
 export const openAIAccessSchema = z.object({
   dialect: z.enum([
-    'alibaba', 'azure', 'deepseek', 'groq', 'lmstudio',
-    'localai', 'mistral', 'moonshot', 'openai',
+    'alibaba', 'azure', 'cerebras', 'cohere', 'deepseek', 'groq', 'lmstudio',
+    'localai', 'metaai', 'mistral', 'modular', 'moonshot', 'nvidianim', 'openai',
     'openrouter', 'perplexity', 'sakanaai', 'togetherai', 'xai', 'zai',
   ]),
   clientSideFetch: z.boolean().optional(), // optional: backward compatibility from newer server version - can remove once all clients are updated
   oaiKey: z.string().trim(),
   oaiOrg: z.string().trim(),
   oaiHost: z.string().trim(),
-  heliKey: z.string().trim(),
 
   // [OpenRouter only] Debug/routing service-level settings
   orRequireParameters: z.boolean().optional(), // Only route to providers supporting all request params
@@ -121,6 +132,44 @@ export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | nu
 
     case 'azure':
       return _azureOpenAIAccess(access, modelRefId, apiPath);
+
+    case 'cerebras':
+      // [Cerebras] OpenAI-compatible, fixed host (no host map): api.cerebras.ai + /v1/...
+      let cerebrasKey = access.oaiKey || env.CEREBRAS_API_KEY || '';
+
+      // Use function to select a random key if multiple keys are provided
+      cerebrasKey = llmsRandomKeyFromMultiKey(cerebrasKey);
+
+      if (!cerebrasKey)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing Cerebras API Key. Add it on the UI (Models Setup) or server side (your deployment).' });
+
+      return {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${cerebrasKey}`,
+        },
+        url: llmsFixupHost(DEFAULT_CEREBRAS_HOST, apiPath) + apiPath,
+      };
+
+    case 'cohere':
+      // [Cohere] OpenAI-compatible endpoint: https://api.cohere.ai/compatibility + /v1/... (verified 2026-07-08). BYO-key only.
+      let cohereKey = access.oaiKey || '';
+      const cohereHost = llmsFixupHost(access.oaiHost || DEFAULT_COHERE_HOST, apiPath);
+
+      // Use function to select a random key if multiple keys are provided
+      cohereKey = llmsRandomKeyFromMultiKey(cohereKey);
+
+      if (!cohereKey || !cohereHost)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing Cohere API Key. Add it on the UI (Models Setup).' });
+
+      return {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${cohereKey}`,
+        },
+        url: cohereHost + apiPath,
+      };
 
     case 'deepseek':
       // https://platform.deepseek.com/api-docs/
@@ -182,6 +231,27 @@ export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | nu
         url: localAIHost + apiPath,
       };
 
+    case 'metaai':
+      // [Meta AI, 2026-09-02] Meta Model API (api.meta.ai): Muse models over the OpenAI Responses API (Chat Completions and
+      // Anthropic Messages are also served, but only Responses carries reasoning across turns) - https://dev.meta.ai/docs/api-reference
+      // Bearer key; served keys are 'LLM_<digits>_<secret>' (the docs print 'LLM|...'). Unknown top-level request params 400.
+      let metaaiKey = access.oaiKey || env.METAAI_API_KEY || '';
+      const metaaiHost = llmsFixupHost(access.oaiHost || env.METAAI_API_HOST || DEFAULT_METAAI_HOST, apiPath);
+
+      // Use function to select a random key if multiple keys are provided
+      metaaiKey = llmsRandomKeyFromMultiKey(metaaiKey);
+
+      if (!metaaiKey || !metaaiHost)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing Meta AI API Key or Host. Add it on the UI (Models Setup) or server side (your deployment).' });
+
+      return {
+        headers: {
+          'Authorization': `Bearer ${metaaiKey}`,
+          'Content-Type': 'application/json',
+        },
+        url: metaaiHost + apiPath,
+      };
+
     case 'mistral':
       // https://docs.mistral.ai/platform/client
       let mistralKey = access.oaiKey || env.MISTRAL_API_KEY || '';
@@ -199,13 +269,38 @@ export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | nu
         url: mistralHost + apiPath,
       };
 
+    case 'modular':
+      // [Modular, 2026-08-13] Modular Cloud (api.modular.com), OpenAI-compatible shared endpoints.
+      // Host is user-overridable to target a self-hosted MAX server (same wire protocol, any model).
+      let modularKey = access.oaiKey || env.MODULAR_API_KEY || '';
+      const modularHost = llmsFixupHost(access.oaiHost || DEFAULT_MODULAR_HOST, apiPath);
+
+      // Use function to select a random key if multiple keys are provided
+      modularKey = llmsRandomKeyFromMultiKey(modularKey);
+
+      // NOTE: no key check - the cloud host requires an 'sk-mod-' key, but self-hosted MAX servers run keyless
+      if (!modularHost)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing Modular API Host. Add it on the UI (Models Setup) or server side (your deployment).' });
+
+      return {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          ...(modularKey && { 'Authorization': `Bearer ${modularKey}` }),
+        },
+        url: modularHost + apiPath,
+      };
+
     case 'moonshot':
       // https://platform.moonshot.ai/docs/api/chat
       let moonshotKey = access.oaiKey || env.MOONSHOT_API_KEY || '';
-      const moonshotHost = llmsFixupHost(access.oaiHost || DEFAULT_MOONSHOT_HOST, apiPath);
 
       // Use function to select a random key if multiple keys are provided
       moonshotKey = llmsRandomKeyFromMultiKey(moonshotKey);
+
+      // Kimi Code subscription keys ('sk-kimi-...') only work on the coding endpoint (401 on api.moonshot.ai, probe-verified 2026-07-18)
+      const moonshotDefaultHost = moonshotKey.startsWith('sk-kimi-') ? DEFAULT_MOONSHOT_CODING_HOST : DEFAULT_MOONSHOT_HOST;
+      const moonshotHost = llmsFixupHost(access.oaiHost || moonshotDefaultHost, apiPath);
 
       if (!moonshotKey || !moonshotHost)
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing Moonshot API Key or Host. Add it on the UI or server side.' });
@@ -218,28 +313,47 @@ export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | nu
         url: moonshotHost + apiPath,
       };
 
+    case 'nvidianim':
+      // [NVIDIA, 2026-07-25] NVIDIA API Catalog (build.nvidia.com), free rate-limited hosted inference on integrate.api.nvidia.com.
+      // Host is user-overridable to target a self-hosted NIM / vLLM endpoint (identical wire protocol and model ids).
+      let nvidiaKey = access.oaiKey || env.NVIDIANIM_API_KEY || '';
+      const nvidiaHost = llmsFixupHost(access.oaiHost || env.NVIDIANIM_API_HOST || DEFAULT_NVIDIANIM_HOST, apiPath);
+
+      // Use function to select a random key if multiple keys are provided
+      nvidiaKey = llmsRandomKeyFromMultiKey(nvidiaKey);
+
+      // NOTE: no key check - the default host requires an 'nvapi-' key (403 without), but self-hosted NIM/vLLM endpoints run keyless
+      if (!nvidiaHost)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing NVIDIA API Host. Add it on the UI (Models Setup) or server side (your deployment).' });
+
+      return {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          ...(nvidiaKey && { 'Authorization': `Bearer ${nvidiaKey}` }),
+        },
+        url: nvidiaHost + apiPath,
+      };
+
     case 'openai': {
 
       // Credential resolution: client-dominated
       // - if the client provides a host, they own the whole request - no server
-      // - credentials (API key, org, Helicone key) are sent to client-chosen endpoints
+      // - credentials (API key, org) are sent to client-chosen endpoints
       // - if the client doesn't set a host, they can still override the key (own billing).
       let oaiKey: string;
       let oaiHost: string;
       let oaiOrg: string;
-      let heliKey: string | false;
       if (access.oaiHost) {
         // Client controls the endpoint: only client credentials
         oaiHost = access.oaiHost;
         oaiKey = access.oaiKey || ''; // key can be null, e.g. LocalAI
         oaiOrg = access.oaiOrg || '';
-        heliKey = access.heliKey || false;
       } else {
         // Client hasn't touched the endpoint: server infrastructure
         oaiHost = /* NO access.oaiHost */ env.OPENAI_API_HOST || DEFAULT_OPENAI_HOST;
         oaiKey = access.oaiKey || env.OPENAI_API_KEY || '';
         oaiOrg = access.oaiOrg || env.OPENAI_API_ORG_ID || '';
-        heliKey = access.heliKey || env.HELICONE_API_KEY || false;
       }
 
       oaiHost = llmsFixupHost(oaiHost, apiPath);
@@ -247,15 +361,6 @@ export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | nu
       // Require a key when targeting the default OpenAI host
       if (!oaiKey && llmsHostnameMatches(oaiHost, DEFAULT_OPENAI_HOST))
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing OpenAI API Key. Add it on the UI or server side (your deployment).' });
-
-      // [Helicone] proxy: redirect default OpenAI host to Helicone when key present;
-      // if host is already Helicone keep it; for any other host, disable the Helicone key
-      if (heliKey) {
-        if (llmsHostnameMatches(oaiHost, DEFAULT_OPENAI_HOST))
-          oaiHost = `https://${DEFAULT_HELICONE_OPENAI_HOST}`;
-        else if (!llmsHostnameMatches(oaiHost, DEFAULT_HELICONE_OPENAI_HOST))
-          heliKey = false;
-      }
 
       // [Cloudflare AI Gateway] proxy: adapt API paths for Cloudflare's routing
       if (llmsHostnameMatches(oaiHost, 'gateway.ai.cloudflare.com')) {
@@ -282,7 +387,6 @@ export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | nu
           'Content-Type': 'application/json',
           ...(oaiKey && { Authorization: `Bearer ${oaiKey}` }),
           ...(oaiOrg && { 'OpenAI-Organization': oaiOrg }),
-          ...(heliKey && { 'Helicone-Auth': `Bearer ${heliKey}` }),
         },
         url: oaiHost + apiPath,
       };
@@ -302,8 +406,14 @@ export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | nu
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${orKey}`,
+          // App attribution (openrouter.ai/docs/app-attribution): drives our app page, rankings and
+          // marketplace category. Set here rather than centrally because these must ride the CSF
+          // (browser) path too - OpenRouter allowlists all four names for CORS, so they preflight fine.
+          // 'X-Title' is the legacy name of 'X-OpenRouter-Title'; both are sent for compatibility.
           'HTTP-Referer': BaseProduct.ProductURL,
           'X-Title': BaseProduct.ProductName,
+          'X-OpenRouter-Title': BaseProduct.ProductName,
+          'X-OpenRouter-Categories': 'general-chat,personal-agent', // max 2/request, from their fixed vocabulary
         },
         url: orHost + apiPath,
       };
@@ -326,6 +436,10 @@ export function openAIAccess(access: OpenAIAccessSchema, modelRefId: string | nu
           'Content-Type': 'application/json',
           'Accept': 'application/json',
           'Authorization': `Bearer ${perplexityKey}`,
+          // the pair Perplexity's own SDKs send (undocumented; both are on their CORS allowlist, so
+          // they also ride the CSF path). Consumption unverified - identity only.
+          'X-Source': BaseProduct.ProductName,
+          'X-Title': BaseProduct.ProductName,
         },
         url: perplexityHost + apiPath,
       };

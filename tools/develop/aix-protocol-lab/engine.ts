@@ -107,7 +107,7 @@ export async function captureRun(opts: CaptureOptions): Promise<{ run: LabRun; k
   });
 
   const dispatchCreator = async (): Promise<ChatGenerateDispatch> => {
-    const dispatch = await createChatGenerateDispatch(access, model, chatGenerate, opts.streaming, !!opts.enableResumability);
+    const dispatch = await createChatGenerateDispatch(access, model, chatGenerate, opts.streaming, undefined /* sessionAffinityId */, !!opts.enableResumability);
     return recorder.instrumentDispatch(
       dispatch,
       (signal) => fetchResponseOrTRPCThrow({ ...dispatch.request, signal, name: `AixLab.${opts.flavor}`, throwWithoutName: true }),
@@ -129,6 +129,8 @@ function _replayParserFor(meta: LabRunMeta): ChatGenerateParseFunction {
       return meta.streaming ? createAnthropicMessageParser() : createAnthropicMessageParserNS();
     case 'openai-responses':
       return meta.streaming ? createOpenAIResponsesEventParser('openai') : createOpenAIResponseParserNS('openai');
+    case 'metaai-responses':
+      return meta.streaming ? createOpenAIResponsesEventParser('metaai') : createOpenAIResponseParserNS('metaai');
     case 'openai-chat':
       return meta.streaming ? createOpenAIChatCompletionsChunkParser() : createOpenAIChatCompletionsParserNS();
     case 'gemini-generate':

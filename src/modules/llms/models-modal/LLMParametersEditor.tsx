@@ -16,6 +16,7 @@ import { InlineError } from '~/common/components/InlineError';
 import { webGeolocationRequest } from '~/common/util/webGeolocationUtils';
 
 import { AnthropicSkillsConfig } from './AnthropicSkillsConfig';
+import { OpenRouterWebToolsConfig } from './OpenRouterWebToolsConfig';
 
 
 const _UNSPECIFIED = '_UNSPECIFIED' as const;
@@ -41,6 +42,7 @@ const _gemEffortOptions = [
 ] as const;
 
 const _oaiEffortOptions = [
+  { value: 'max', label: 'Max', description: 'Deepest reasoning (GPT-5.6+)' } as const,
   { value: 'xhigh', label: 'X-High', description: 'Hardest thinking, best quality' } as const,
   { value: 'high', label: 'High', description: 'Deep, thorough analysis' } as const,
   { value: 'medium', label: 'Medium', description: 'Balanced reasoning depth' } as const,
@@ -52,18 +54,40 @@ const _oaiEffortOptions = [
 
 const _miscEffortOptions = [
   { value: 'max', label: 'Max', description: 'Hardest thinking' } as const,
-  { value: 'high', label: 'On', description: 'Multi-step reasoning' } as const,
+  { value: 'high', label: 'High', description: 'Multi-step reasoning' } as const,
+  { value: 'low', label: 'Low', description: 'Light thinking' } as const,
   { value: 'none', label: 'Off', description: 'Disable thinking mode' } as const,
   { value: _UNSPECIFIED, label: 'Default', description: 'Model Default' } as const,
 ] as const;
 
-export function llmParametersFilterEffortOptions<T extends { value: string }>(options: readonly T[], spec: DModelParameterSpecAny | undefined, registryKey: keyof typeof DModelParameterRegistry): T[] | null {
+export function llmParametersFilterEffortOptions<T extends { value: string, label: string }>(options: readonly T[], spec: DModelParameterSpecAny | undefined, registryKey: keyof typeof DModelParameterRegistry): T[] | null {
   if (!spec) return null;
   const registry = DModelParameterRegistry[registryKey];
   const allowedSet = new Set((spec.enumValues as readonly string[] | undefined) ?? ('values' in registry ? registry.values : []));
-  return options.filter(o => o.value === _UNSPECIFIED || allowedSet.has(o.value));
+  const filtered = options.filter(o => o.value === _UNSPECIFIED || allowedSet.has(o.value));
+  // 'Thinking' label nuance: on a graded model (low/max present) 'high' is a rung on the scale -> 'High';
+  // on a pure toggle ({none,high}, e.g. Qwen/GLM/Nemotron) it just means enabled -> 'On'
+  if (registryKey === 'llmVndMiscEffort' && !allowedSet.has('low') && !allowedSet.has('max'))
+    return filtered.map(o => o.value === 'high' ? { ...o, label: 'On' } as T : o);
+  return filtered;
 }
 
+
+const _oaiReasoningModeOptions = [
+  { value: 'pro', label: 'Pro', description: 'Additional model work for the hardest problems' } as const,
+  { value: _UNSPECIFIED, label: 'Default', description: 'Standard reasoning (mode omitted)' } as const,
+] as const;
+// 'standard' equals the omitted default and is no longer pickable; kept only so an already-stored value still renders
+const _oaiReasoningModeLegacyOptions = [
+  ..._oaiReasoningModeOptions,
+  { value: 'standard', label: 'Standard', description: 'Regular reasoning' } as const,
+] as const;
+
+const _oaiServiceTierOptions = [
+  { value: 'fast', label: 'Fast', description: 'Up to 2.5x faster, 2x price' } as const,
+  { value: 'flex', label: 'Flex', description: 'Slower, half price' } as const,
+  { value: _UNSPECIFIED, label: 'Standard', description: 'Standard processing' } as const,
+] as const;
 
 const _verbosityOptions = [
   { value: 'high', label: 'Detailed', description: 'Thorough responses, great for audits' } as const,
@@ -150,17 +174,11 @@ const _antWebFetchOptions = [
 //   { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
 // ] as const;
 
-const _ortWebSearchOptions = [
-  { value: 'auto', label: 'On', description: 'Enable web search (native for OpenAI/Anthropic, Exa for others)' },
-  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
-] as const;
-
 const _imageGenerationOptions = [
   { value: _UNSPECIFIED, label: 'Off', description: 'Default (disabled)' },
   { value: 'mq', label: 'Standard', description: 'Quick gen' },
   { value: 'hq', label: 'High Quality', description: 'Best looks' },
-  { value: 'hq_edit', label: 'Precise Edits', description: 'Controlled' },
-  // { value: 'hq_png', label: 'HD PNG', description: 'Uncompressed' }, // TODO: re-enable when uncompressed PNG saving is implemented
+  { value: 'max', label: 'Max', description: 'Slowest, priciest' },
 ] as const;
 
 const _oaiCodeInterpreterOptions = [
@@ -268,13 +286,17 @@ export function LLMParametersEditor(props: {
     llmVndMiscEffort,
     // llmVndMoonshotWebSearch,
     llmVndOaiEffort,
+    llmVndOaiReasoningMode,
     llmVndOaiRestoreMarkdown,
+    llmVndOaiServiceTier,
     llmVndOaiWebSearchContext,
     llmVndOaiWebSearchGeolocation,
     llmVndOaiImageGeneration,
     llmVndOaiCodeInterpreter,
     llmVndOaiVerbosity,
+    llmVndOrtWebFetch,
     llmVndOrtWebSearch,
+    llmVndOrtWebToolsAdvanced,
     llmVndPerplexityDateFilter,
     llmVndPerplexitySearchMode,
     llmVndXaiCodeExecution,
@@ -334,26 +356,32 @@ export function LLMParametersEditor(props: {
   //             Now this seems to be still the case for llmVndOaiEffort === 'minimal' (gpt 5.0 and before), 5.1/5.2 work even with 'none'
   const oaiSkipSearchOnMinimalEffort = llmVndOaiEffort === 'minimal';
 
+  // [2026-07-09, OpenAI] reasoning models unlock temperature at effort 'none' (mirrors the hotfixOmitTemperature bypass in aix.client)
+  const oaiTempUnlockedByNoReasoning = !!props.parameterOmitTemperature && llmVndOaiEffort === 'none';
+
   return <>
 
     {!(props.simplified && props.parameterOmitTemperature) && <FormSliderControl
       title={<span style={{ minWidth: 100 }}>Temperature</span>} ariaLabel='Model Temperature'
       description={
         antThinkingEnabled_Adaptive ? 'Off (adaptive)' : antThinkingEnabled ? 'Off (thinking)'
-          : llmTemperature === null ? 'Unsupported'
+          : llmTemperature === null ? (oaiTempUnlockedByNoReasoning ? 'Default' : 'Unsupported')
             : llmTemperature === undefined ? 'Default'
               : llmTemperature < 0.33 ? 'More strict'
                 : llmTemperature > 1 ? 'Extra hot ♨️'
                   : llmTemperature > 0.67 ? 'Larger freedom' : 'Creativity'
       }
-      disabled={props.parameterOmitTemperature /* set when LLM_IF_HOTFIX_NoTemperature */ || antThinkingEnabled}
+      disabled={(props.parameterOmitTemperature && !oaiTempUnlockedByNoReasoning) /* set when LLM_IF_HOTFIX_NoTemperature, unless effort 'none' unlocks it */ || antThinkingEnabled}
       min={0}
       max={overheat ? 2 : 1}
       step={0.1}
       defaultValue={0.5 /* FIXME: this wasn't FALLBACK_LLM_PARAM_TEMPERATURE, but we shall not need this */}
       valueLabelDisplay={props.parameters?.llmTemperature === undefined || antThinkingEnabled ? 'auto' : 'on'} // detect user-overridden or not
-      value={llmTemperature ?? (overheat ? [1, 1] : [0.5, 0.5]) /* null and undefined both would become undefined (uncontrolled) in the slider */}
-      onChange={value => onChangeParameter({ llmTemperature: value })}
+      value={llmTemperature ?? ( // nullish: single thumb when interactive (unlocked), collapsed two-thumb 'empty' look only when disabled - an array on a live slider becomes a range control
+        oaiTempUnlockedByNoReasoning ? 0.5 // default when unlocked by OpenAI + effort 'none'
+          : overheat ? [1, 1] : [0.5, 0.5]
+      )}
+      onChange={value => onChangeParameter({ llmTemperature: Array.isArray(value) ? value[0] : value })}
       endAdornment={
         <Tooltip arrow disableInteractive title={overheat ? 'Disable LLM Overheating' : 'Increase Max LLM Temperature to 2'} sx={{ p: 1 }}>
           <IconButton
@@ -448,6 +476,32 @@ export function LLMParametersEditor(props: {
           else onChangeParameter({ llmVndOaiEffort: value });
         }}
         options={oaiEffortOptions}
+      />
+    )}
+    {/* OpenAI Reasoning Mode (GPT-5.6+) */}
+    {showParam('llmVndOaiReasoningMode') && (
+      <FormSelectControl
+        title='Reasoning Mode'
+        tooltip='Pro mode performs additional model work for difficult tasks; token usage is higher, billed at standard rates'
+        value={llmVndOaiReasoningMode ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndOaiReasoningMode');
+          else onChangeParameter({ llmVndOaiReasoningMode: value });
+        }}
+        options={llmVndOaiReasoningMode === 'standard' ? _oaiReasoningModeLegacyOptions : _oaiReasoningModeOptions}
+      />
+    )}
+    {/* OpenAI Service Tier */}
+    {showParam('llmVndOaiServiceTier') && (
+      <FormSelectControl
+        title='Service Tier'
+        tooltip='Fast: faster at 2x price. Flex: slower at half price. A downgraded request bills at standard rates.'
+        value={llmVndOaiServiceTier ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndOaiServiceTier');
+          else onChangeParameter({ llmVndOaiServiceTier: value });
+        }}
+        options={_oaiServiceTierOptions}
       />
     )}
     {/* Moonshot/Z.ai Thinking */}
@@ -892,16 +946,16 @@ export function LLMParametersEditor(props: {
     )}
 
 
-    {showParam('llmVndOrtWebSearch') && (
-      <FormSelectControl
-        title='Web Search'
-        tooltip='Enable OpenRouter web search plugin. Uses native search for OpenAI/Anthropic models, Exa for others. Adds web citations to responses.'
-        value={llmVndOrtWebSearch ?? _UNSPECIFIED}
-        onChange={(value) => {
-          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndOrtWebSearch');
-          else onChangeParameter({ llmVndOrtWebSearch: value });
-        }}
-        options={_ortWebSearchOptions}
+    {(showParam('llmVndOrtWebSearch') || showParam('llmVndOrtWebFetch')) && (
+      <OpenRouterWebToolsConfig
+        showAdvanced={showParam('llmVndOrtWebToolsAdvanced')}
+        searchSpec={showParam('llmVndOrtWebSearch') ? modelParamSpec['llmVndOrtWebSearch'] : undefined}
+        hasFetch={showParam('llmVndOrtWebFetch')}
+        llmVndOrtWebSearch={llmVndOrtWebSearch}
+        llmVndOrtWebFetch={llmVndOrtWebFetch}
+        llmVndOrtWebToolsAdvanced={llmVndOrtWebToolsAdvanced}
+        onChangeParameter={onChangeParameter}
+        onRemoveParameter={onRemoveParameter}
       />
     )}
 

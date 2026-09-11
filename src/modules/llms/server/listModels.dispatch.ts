@@ -8,7 +8,7 @@ import { createDebugWireLogger } from '~/server/wire';
 import { fetchJsonOrTRPCThrow } from '~/server/trpc/trpc.router.fetchers';
 
 import type { ModelDescriptionSchema } from './llm.server.types';
-import { llmDevValidateParameterSpecs_DEV, llmsAutoImplyInterfaces } from './models.mappings';
+import { llmDevValidateParameterSpecs_DEV, llmsAutoImplyInterfaces, llmsWireCompatCacheTag } from './models.mappings';
 
 
 // protocol: Anthropic
@@ -35,18 +35,25 @@ import { OPENAI_API_PATHS, openAIAccess } from './openai/openai.access';
 import { alibabaModelFilter, alibabaModelSort, alibabaModelToModelDescription } from './openai/models/alibaba.models';
 import { arceeAIHeuristic, arceeAIModelsToModelDescriptions } from './openai/models/arceeai.models';
 import { azureDeploymentFilter, azureDeploymentToModelDescription, azureParseFromDeploymentsAPI } from './openai/models/azure.models';
+import { basetenHeuristic, basetenModelsToModelDescriptions } from './openai/models/baseten.models';
+import { cerebrasFetchModelDescriptions } from './openai/models/cerebras.models';
 import { chutesAIHeuristic, chutesAIModelsToModelDescriptions } from './openai/models/chutesai.models';
-import { deepseekModelFilter, deepseekModelSort, deepseekModelToModelDescription } from './openai/models/deepseek.models';
+import { cohereModelFilter, cohereModelSort, cohereModelToModelDescription } from './openai/models/cohere.models';
+import { deepseekInjectVariants, deepseekModelFilter, deepseekModelSort, deepseekModelToModelDescription } from './openai/models/deepseek.models';
 import { fastAPIHeuristic, fastAPIModels } from './openai/models/fastapi.models';
 import { fireworksAIHeuristic, fireworksAIModelsToModelDescriptions } from './openai/models/fireworksai.models';
 import { groqModelFilter, groqModelSortFn, groqModelToModelDescription, groqValidateModelDefs_DEV } from './openai/models/groq.models';
 import { llmapiHeuristic, llmapiModelsToModelDescriptions } from './openai/models/llmapi.models';
 import { llmsIsNativeOpenAIHost } from '../shared/llm.isomorphic';
 import { minimaxHardcodedModelDescriptions, minimaxHeuristic } from './openai/models/minimax.models';
+import { nousResearchHeuristic, nousResearchModelsToModelDescriptions } from './openai/models/nousresearch.models';
 import { novitaHeuristic, novitaModelsToModelDescriptions } from './openai/models/novita.models';
+import { nvidiaNIMHeuristic, nvidiaNIMModelsToModelDescriptions } from './openai/models/nvidianim.models';
 import { lmStudioFetchModels, lmStudioModelsToModelDescriptions } from './openai/models/lmstudio.models';
 import { localAIModelSortFn, localAIModelToModelDescription } from './openai/models/localai.models';
+import { metaAIModelsToModelDescriptions } from './openai/models/metaai.models';
 import { mistralModels } from './openai/models/mistral.models';
+import { modularModelsToModelDescriptions } from './openai/models/modular.models';
 import { moonshotModelFilter, moonshotModelSortFn, moonshotModelToModelDescription } from './openai/models/moonshot.models';
 import { openRouterInjectVariants, openRouterModelFamilySortFn, openRouterModelToModelDescription } from './openai/models/openrouter.models';
 import { openAIInjectVariants, openAIModelFilter, openAIModelToModelDescription, openAISortModels, openaiValidateModelDefs_DEV } from './openai/models/openai.models';
@@ -80,7 +87,8 @@ export async function listModelsRunDispatch(access: AixAPI_Access, signal?: Abor
   const dispatch = _listModelsCreateDispatch(access, signal);
   const wireModels = await dispatch.fetchModels();
   const models = dispatch.convertToDescriptions(wireModels)
-    .map(llmsAutoImplyInterfaces); // auto-inject implied IFs from parameterSpecs
+    .map(llmsAutoImplyInterfaces) // auto-inject implied IFs from parameterSpecs
+    .map(llmsWireCompatCacheTag); // legacy cache tag for older clients - TODO: delete after 2026-12-03
 
   // DEV: validate parameterSpecs (enumValues ⊆ registry values, paramId existence)
   if (process.env.NODE_ENV === 'development')
@@ -369,13 +377,24 @@ function _listModelsCreateDispatch(access: AixAPI_Access, signal?: AbortSignal):
         },
       });
 
+    case 'cerebras':
+      // [Cerebras] custom listing: rich public catalog + Cloudflare UA workaround live in cerebras.models.ts
+      return createListModelsDispatch({
+        fetchModels: async () => cerebrasFetchModelDescriptions(access, signal),
+        convertToDescriptions: (descriptions) => descriptions,
+      });
+
     case 'alibaba':
     case 'azure':
+    case 'cohere':
     case 'deepseek':
     case 'groq':
     case 'localai':
+    case 'metaai':
     case 'mistral':
+    case 'modular':
     case 'moonshot':
+    case 'nvidianim':
     case 'openai':
     case 'openrouter':
     case 'sakanaai':
@@ -446,12 +465,19 @@ function _listModelsCreateDispatch(access: AixAPI_Access, signal?: AbortSignal):
                 .map(azureDeploymentToModelDescription)
                 .sort(openAISortModels);
 
-            case 'deepseek':
+            case 'cohere':
+              // [Cohere] curated caps/pricing/params via manual mappings; drop embed/rerank/transcribe endpoints
               return maybeModels
+                .filter(({ id }) => cohereModelFilter(id))
+                .map(({ id }) => cohereModelToModelDescription(id))
+                .sort(cohereModelSort);
+
+            case 'deepseek':
+              return deepseekInjectVariants(maybeModels // appends the unlisted V4.1-Flash beta while live
                 .filter(({ id }) => deepseekModelFilter(id))
                 .map(({ id }) => deepseekModelToModelDescription(id))
                 // .reduce(deepseekInjectVariants, [] as ModelDescriptionSchema[]) // was used to inject V3.2-Speciale
-                .sort(deepseekModelSort);
+              ).sort(deepseekModelSort);
 
             case 'groq':
               // [DEV] check for stale/unknown model definitions
@@ -466,8 +492,17 @@ function _listModelsCreateDispatch(access: AixAPI_Access, signal?: AbortSignal):
                 .map(({ id }) => localAIModelToModelDescription(id))
                 .sort(localAIModelSortFn);
 
+            case 'metaai':
+              // [Meta AI] ids-only list (created is a constant 0, no type field): caps/pricing/params from the curated
+              // table; the transcription id is filtered out by name, the image model is curated and kept
+              return metaAIModelsToModelDescriptions(maybeModels);
+
             case 'mistral':
               return mistralModels(maybeModels);
+
+            case 'modular':
+              // [Modular] API lists ids only; caps/pricing from manual mappings, unknown ids kept (self-hosted MAX serves anything)
+              return modularModelsToModelDescriptions(maybeModels);
 
             case 'moonshot':
               return maybeModels
@@ -477,9 +512,18 @@ function _listModelsCreateDispatch(access: AixAPI_Access, signal?: AbortSignal):
 
             case 'openai':
 
+              // [NVIDIA NIM] custom-host services pointing at NVIDIA's endpoint get the curated parser
+              // (the /v1/models list is a stale superset where ~half the ids are retired and hard-404)
+              if (nvidiaNIMHeuristic(oaiUrl))
+                return nvidiaNIMModelsToModelDescriptions(maybeModels);
+
               // [Arcee AI] special case for model enumeration
               if (arceeAIHeuristic(oaiUrl))
                 return arceeAIModelsToModelDescriptions(openAIWireModelsResponse);
+
+              // [Baseten] Model APIs - curated slate with rich listing metadata
+              if (basetenHeuristic(oaiUrl))
+                return basetenModelsToModelDescriptions(openAIWireModelsResponse);
 
               // [ChutesAI] special case for model enumeration
               if (chutesAIHeuristic(oaiUrl))
@@ -492,6 +536,10 @@ function _listModelsCreateDispatch(access: AixAPI_Access, signal?: AbortSignal):
               // [MiniMax] hardcoded models (no /v1/models API yet)
               if (minimaxHeuristic(oaiUrl))
                 return minimaxHardcodedModelDescriptions();
+
+              // [Nous Research] Nous Portal gateway - OpenRouter-style catalog, reuses the OpenRouter mapper
+              if (nousResearchHeuristic(oaiUrl))
+                return nousResearchModelsToModelDescriptions(openAIWireModelsResponse);
 
               // [Novita] special case for model enumeration
               if (novitaHeuristic(oaiUrl))
@@ -508,8 +556,8 @@ function _listModelsCreateDispatch(access: AixAPI_Access, signal?: AbortSignal):
               // [OpenAI or OpenAI-compatible]: chat-only models, custom sort, manual mapping
               const isNotOpenai = !llmsIsNativeOpenAIHost(access.oaiHost); // native = empty host (uses default) or explicitly api.openai.com
               const models = maybeModels
-                // limit to only 'gpt' and 'non instruct' models
-                .filter(openAIModelFilter)
+                // limit to only 'gpt' and 'non instruct' models (shutdown denies apply to native OpenAI only)
+                .filter(model => openAIModelFilter(model, !isNotOpenai))
                 // to model description
                 .map((model: any): ModelDescriptionSchema => openAIModelToModelDescription(model.id, { isNotOpenai, modelCreated: model.created }))
                 // inject variants
@@ -518,7 +566,7 @@ function _listModelsCreateDispatch(access: AixAPI_Access, signal?: AbortSignal):
                 .sort(openAISortModels);
 
               // [DEV] check for stale/unknown model definitions
-              openaiValidateModelDefs_DEV(maybeModels, models);
+              openaiValidateModelDefs_DEV(maybeModels, models, !isNotOpenai);
               return models;
 
             case 'openrouter':
@@ -528,6 +576,11 @@ function _listModelsCreateDispatch(access: AixAPI_Access, signal?: AbortSignal):
                 .map(openRouterModelToModelDescription)
                 .filter(desc => !!desc)
                 .reduce(openRouterInjectVariants, []);
+
+            case 'nvidianim':
+              // [NVIDIA NIM] API lists ids only (constant 'created', no metadata) - curated table with
+              // measured context windows; unknown ids dropped (the list is a stale superset, ~half retired)
+              return nvidiaNIMModelsToModelDescriptions(maybeModels);
 
             case 'sakanaai':
               // [Sakana.ai] Fugu models - API lists ids only; caps/pricing/params from manual mappings

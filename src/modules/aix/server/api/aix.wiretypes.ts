@@ -1,13 +1,15 @@
 import * as z from 'zod/v4';
 
 // Used to align Particles to the Typescript definitions from the frontend-side, on 'chat.fragments.ts'
-import type { DMessageToolResponsePart } from '~/common/stores/chat/chat.fragments';
+import type { DMessageFragmentVendorStateKnown, DMessageToolResponsePart } from '~/common/stores/chat/chat.fragments';
 
 import { anthropicAccessSchema } from '~/modules/llms/server/anthropic/anthropic.access';
 import { bedrockAccessSchema } from '~/modules/llms/server/bedrock/bedrock.access';
 import { geminiAccessSchema } from '~/modules/llms/server/gemini/gemini.access';
 import { ollamaAccessSchema } from '~/modules/llms/server/ollama/ollama.access';
 import { openAIAccessSchema } from '~/modules/llms/server/openai/openai.access';
+
+import { OrtMaxToolCalls_schema, OrtWebFetchTool_schema, OrtWebSearchTool, OrtWebSearchTool_schema } from './aix.wiretypes.openrouter';
 
 
 //
@@ -21,6 +23,7 @@ import { openAIAccessSchema } from '~/modules/llms/server/openai/openai.access';
 export type AixParts_DocPart = z.infer<typeof AixWire_Parts.DocPart_schema>;
 export type AixParts_InlineAudioPart = z.infer<typeof AixWire_Parts.InlineAudioPart_schema>;
 export type AixParts_InlineImagePart = z.infer<typeof AixWire_Parts.InlineImagePart_schema>;
+export type AixParts_MediaUrlPart = z.infer<typeof AixWire_Parts.MediaUrlPart_schema>;
 export type AixParts_ModelAuxPart = z.infer<typeof AixWire_Parts.ModelAuxPart_schema>;
 export type AixParts_MetaCacheControl = z.infer<typeof AixWire_Parts.MetaCacheControl_schema>;
 export type AixParts_MetaInReferenceToPart = z.infer<typeof AixWire_Parts.MetaInReferenceToPart_schema>;
@@ -91,42 +94,65 @@ export namespace OpenAPI_Schema {
 
 }
 
+
+export namespace AixWire_Vendors {
+
+  /**
+   * Responses-API dialect vendors: the OpenAI Responses wire format is shared by these, but each keeps its OWN `_vnd`
+   * namespace for continuity state (encrypted reasoning blobs, server-side item ids, message phase) - the blobs are
+   * vendor-server-private and must round-trip back to the SAME vendor only (OpenAI 404s "Item with id rs_... not
+   * found", Meta 400s "not found or has expired"). The parser is tagged with the dialect, the adapter reads its own key.
+   * Adding one: append here, add the key in `AixWire_Parts._vnd` and in `DMessageFragmentVendorState` (chat.fragments.ts),
+   * then map the transport dialect to it in openai.responsesCreate.ts (`_RSP_DIALECT_QUIRKS`).
+   */
+  export const RSP_VENDORS = ['metaai', 'openai', 'sakanaai', 'xai'] as const satisfies (keyof DMessageFragmentVendorStateKnown)[];
+  export type RspVendor = typeof RSP_VENDORS[number];
+  export function isRspVendor(vendor: string): vendor is RspVendor {
+    return (RSP_VENDORS as readonly string[]).includes(vendor);
+  }
+
+  /** One Responses-dialect namespace - the same shape for every RspVendor */
+  const _RspVndState_schema = z.object({
+    // reasoning item continuity handle: mirrors the source output item ({ id, encrypted_content }); parallels
+    // _vnd Anthropic's { container: { id, expiresAt } } pattern
+    reasoningItem: z.object({
+      id: z.string().optional(),               // rs_... - item id
+      encryptedContent: z.string().optional(), // blob returned when include:['reasoning.encrypted_content']
+    }).optional(),
+    // message phase (on text parts): gpt-5.4+ and Muse Spark tag assistant messages 'commentary' | 'final_answer';
+    // resent on replay (dropping it degrades performance per OpenAI docs)
+    phase: z.enum(['commentary', 'final_answer']).optional(),
+  });
+
+  /**
+   * Every namespace is optional and any subset may be present (a fragment normally carries one vendor's state).
+   * NOTE: not a z.record / z.partialRecord over the enum: in zod 4 an enum-keyed record rejects every key outside the
+   * enum (`invalid_key`, verified 4.4.3), so it can neither sit next to `gemini` nor tolerate state from a vendor this
+   * build does not know. A z.object strips unknown keys instead - dropped, not fatal.
+   */
+  export const VndState_schema = z.object({
+    gemini: z.object({
+      thoughtSignature: z.string().optional(),
+    }).optional(),
+    // one optional key per Responses dialect - `satisfies` keeps this list in lockstep with RSP_VENDORS
+    ...({
+      metaai: _RspVndState_schema.optional(),
+      openai: _RspVndState_schema.optional(),
+      sakanaai: _RspVndState_schema.optional(),
+      xai: _RspVndState_schema.optional(),
+    } satisfies Record<RspVendor, z.ZodOptional<typeof _RspVndState_schema>>),
+  });
+
+}
+
+
 export namespace AixWire_Parts {
 
   /** Parts that come from the model shall inherit this, so they can echo-back vendor data */
   const _BasePart_schema = z.object({
 
     /** DMessageFragment.vendorState <- model-generated, vendor-specific opaque state (protocol continuity, not content) */
-    _vnd: z.object({
-      gemini: z.object({
-        thoughtSignature: z.string().optional(),
-      }).optional(),
-      openai: z.object({
-        // Responses API reasoning item continuity handle. Sub-object mirrors the shape of the source output item
-        // and parallels _vnd Anthropic's { container: { id, expiresAt } } pattern.
-        // IMPORTANT: this blob is OpenAI-server-encrypted; do NOT round-trip to xAI (different keys + private item ids).
-        reasoningItem: z.object({
-          id: z.string().optional(),               // rs_... - item id
-          encryptedContent: z.string().optional(), // blob returned when include:['reasoning.encrypted_content']
-        }).optional(),
-      }).optional(),
-      xai: z.object({
-        // xAI Responses API reasoning item continuity handle. Same WIRE shape as OpenAI's, but the encrypted_content
-        // is encrypted with xAI's keys and the item id references xAI server state - NOT cross-portable to OpenAI.
-        reasoningItem: z.object({
-          id: z.string().optional(),
-          encryptedContent: z.string().optional(),
-        }).optional(),
-      }).optional(),
-      // NOTE: we do NOT use this mechanism for per-vendor customization/ALT for parts
-      // anthropic: z.object({
-      //   containerUpload: z.object({
-      //     fileId: z.string(),
-      //     containerId: z.string().optional(),
-      //   }).optional(),
-      // }).optional(),
-    }).optional(),
-    // _vnd: z.record(z.string(), z.unknown()).optional(),
+    _vnd: AixWire_Vendors.VndState_schema.optional(),
 
   });
 
@@ -162,7 +188,7 @@ export namespace AixWire_Parts {
      * - image/gif: Anthropic, OpenAI
      * - image/heic, image/heif: Gemini
      */
-    mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']), // keep in sync with AIX_WIRE_IMAGE_MIMETYPES
     base64: z.string(),
   });
 
@@ -196,6 +222,22 @@ export namespace AixWire_Parts {
     }),
 
     // meta: ignored...
+  });
+
+  /**
+   * URL-referenced media (user-only part): a public URL the provider fetches server-side - never
+   * downloaded or inlined by us (e.g. YouTube or direct .mp4 for Gemini video understanding).
+   * Dialects without native support lower this to text via `approxMediaUrlPart_To_String`.
+   */
+  export const MediaUrlPart_schema = z.object({
+    pt: z.literal('media_url'),
+    mediaKind: z.literal('video'), // future: 'audio'
+    url: z.string(),
+    mimeType: z.string().optional(), // for direct media URLs; absent for YouTube
+    // FUTURE (no producer yet - enable with the trim/sampling UI; the Gemini lowering maps these to videoMetadata):
+    // clipStartSec: z.number().optional(), // -> videoMetadata.startOffset '<n>s' (verified: bills only the slice)
+    // clipEndSec: z.number().optional(),   // -> videoMetadata.endOffset '<n>s'
+    // fps: z.number().optional(),          // -> videoMetadata.fps (default: 1)
   });
 
   // Tool Call
@@ -307,6 +349,7 @@ export namespace AixWire_Content {
       // AixWire_Parts.InlineAudioPart_schema,
       AixWire_Parts.InlineImagePart_schema,
       AixWire_Parts.DocPart_schema,
+      AixWire_Parts.MediaUrlPart_schema, // Aug 14, 2026: URL-referenced video input (user-only)
       AixWire_Parts.MetaCacheControl_schema,
       AixWire_Parts.MetaInReferenceToPart_schema,
     ])),
@@ -421,18 +464,23 @@ export namespace AixWire_Tooling {
    * Policy for tools that the model can use:
    * - auto: can use a tool or not (default, same as not specifying a policy)
    * - any: MUST use one tool at least - DEPRECATED, see below
-   * - function_call: MUST use a specific Function Tool - DEPRECATED, see below
+   * - function_call: MUST use a specific Function Tool [DISABLED 2026-07-17 - see below]
    * - none: same as not giving the model any tool [REMOVED - just give no tools]
    *
-   * @deprecated 'any' and 'function_call' (forced tool use) are a thing of the past - 2026-06-09:
-   * Claude Fable/Mythos 5 reject them with a 400 ('tool_choice forces tool use is not compatible with
-   * this model.'); the Anthropic adapter coerces them to 'auto' + a system steering hint. New code
-   * should use 'auto' (or no policy) and instruct the model to call the tool in the prompt instead.
+   * @deprecated forced tool use is a thing of the past - 2026-06-09: Claude Fable/Mythos 5 (and 5.1) reject it
+   * with a 400 ('tool_choice ... not supported for this model'); the Anthropic and OpenRouter adapters
+   * coerce to 'auto' + a system steering hint. New code should use 'auto' (or no policy)
+   * and instruct the model to call the tool in the prompt instead.
+   *
+   * 2026-07-17: 'function_call' (forced NAMED tool) commented out AIX-wide: Moonshot also 400s it on
+   * all thinking-mode requests ("tool_choice 'specified' is incompatible with thinking enabled" - K3
+   * always), modern models don't need it, and with a single tool 'any' is equivalent. 'any' is kept.
    */
   export const ToolsPolicy_schema = z.discriminatedUnion('type', [
     z.object({ type: z.literal('auto') }),
-    z.object({ type: z.literal('any') /*, parallel: z.boolean()*/ }), // @deprecated - prefer 'auto' + prompt steering
-    z.object({ type: z.literal('function_call'), function_call: z.object({ name: z.string() }) }), // @deprecated - prefer 'auto' + prompt steering
+    // @deprecated - prefer 'auto' + prompt steering
+    z.object({ type: z.literal('any') /*, parallel: z.boolean()*/ }),
+    // z.object({ type: z.literal('function_call'), function_call: z.object({ name: z.string() }) }), // DISABLED 2026-07-17 - forced named tool, see deprecation note above
   ]);
 
 }
@@ -518,7 +566,7 @@ export namespace AixWire_API {
     vndAntWebSearchMaxUses: z.number().int().min(1).max(50).optional(),
 
     // Bedrock
-    vndBedrockAPI: z.enum(['converse', 'invoke-anthropic', 'mantle']).optional(),
+    vndBedrockAPI: z.enum(['converse', 'invoke-anthropic', 'mantle', 'mantle-responses']).optional(),
 
     // Gemini
     vndGeminiAPI: z.enum(['interactions-agent']).optional(), // opt-in per-model API dialect; unset = generateContent
@@ -539,14 +587,18 @@ export namespace AixWire_API {
     // OpenAI
     vndOaiCodeInterpreter: z.enum(['off', 'auto']).optional(),
     vndOaiContainerId: z.string().optional(), // [Responses] reuse a prior code-interpreter session container (caller checks expiry before setting)
-    vndOaiImageGeneration: z.enum(['mq', 'hq', 'hq_edit', 'hq_png']).optional(),
+    vndOaiImageGeneration: z.enum(['mq', 'hq', 'max', 'hq_edit' /* legacy -> hq */, 'hq_png' /* legacy -> hq */]).optional(), // legacy values still accepted from older bundles
+    vndOaiReasoningMode: z.enum(['standard', 'pro']).optional(), // [2026-07-09, OpenAI] [Responses] GPT-5.6+ reasoning.mode - 'pro' performs additional model work, billed at standard rates
+    vndOaiServiceTier: z.enum(['flex', 'fast']).optional(), // [2026-09-03, OpenAI] request service_tier: flex (0.5x, slower) | fast (2x, faster); native OpenAI only
     vndOaiResponsesAPI: z.boolean().optional(),
     vndOaiRestoreMarkdown: z.boolean().optional(),
     vndOaiVerbosity: z.enum(['low', 'medium', 'high']).optional(),
     vndOaiWebSearchContext: z.enum(['low', 'medium', 'high']).optional(),
 
-    // OpenRouter
-    vndOrtWebSearch: z.enum(['auto']).optional(),
+    // OpenRouter - web tools run by OpenRouter itself, not by the model provider (types: aix.wiretypes.openrouter.ts)
+    vndOrtWebSearch: z.union([OrtWebSearchTool_schema, z.literal('auto').transform((): OrtWebSearchTool => ({ via: 'plugin' }))]).optional(), // 'auto': the plain switch of clients built before 2026-09-08, which always got the plugin; drop when no longer seen
+    vndOrtWebFetch: OrtWebFetchTool_schema.optional(),
+    vndOrtMaxToolCalls: OrtMaxToolCalls_schema.optional(), // server-tool step budget for the request, across search and fetch
 
     // Perplexity
     vndPerplexityDateFilter: z.enum(['unfiltered', '1m', '3m', '6m', '1y']).optional(),
@@ -715,6 +767,7 @@ export namespace AixWire_Particles {
     | { cg: 'set-model', name: string }
     | { cg: 'set-provider-infra', label: string }
     | { cg: 'set-upstream-handle', handle: { uht: 'vnd.oai.responses' | 'vnd.gem.interactions', runId: string, createdAt: number | null, expiresAt: number | null } }
+    | { cg: 'input-transform', itt: 'thinking-dropped', cause: 'history-edited' | 'model-switch' | (string & {}), reason: string, paths: string[] } // the server rewrote our request: dropped replayed thinking blocks, one particle per vendor reason; `cause` normalizes `reason` (open set), `paths` are wire locations; client-side log for now
     | { cg: '_debugDispatchRequest', security: 'dev-env', dispatchRequest: { url: string, headers: string, body: string, bodySize: number } } // may generalize this in the future
     | { cg: '_debugProfiler', measurements: Record<string, number | string>[] };
 
@@ -758,6 +811,9 @@ export namespace AixWire_Particles {
     TOutR?: number,       // Portion of TOut that was used for reasoning (e.g. not for output)
     // TOutA?: number,    // Portion of TOut that was used for Audio
 
+    // n = Counts of per-call billed server tools
+    nWebSearch?: number,  // web searches executed
+
     // dt = milliseconds
     dtStart?: number,
     dtInner?: number,
@@ -768,6 +824,7 @@ export namespace AixWire_Particles {
 
     // $c = Cents of USD
     $cReported?: number,  // Total cost in cents as reported by provider (e.g. Perplexity usage.cost.total_cost)
+    $xPrice?: number,     // Provider-confirmed price multiplier vs listed rates, from the echoed service tier (flex 0.5, fast 2, ...)
   };
 
   // TextParticle / PartParticle - keep in line with the DMessage*Part counterparts
@@ -790,6 +847,7 @@ export namespace AixWire_Particles {
     | { p: 'cer', id: string, error: DMessageToolResponsePart['error'], result: string, executor: 'gemini_auto_inline' | 'code_interpreter', environment: DMessageToolResponsePart['environment'] }
     | { p: 'ia', mimeType: string, a_b64: string, label?: string, generator?: string, durationMs?: number } // inline audio, complete
     | { p: 'ii', mimeType: string, i_b64: string, label?: string, generator?: string, prompt?: string, hintSkipResize?: boolean } // inline image, complete
+    | { p: 'iv', mimeType: string, v_b64: string, label?: string, generator?: string } // inline video, complete (EXPERIMENTAL: Gemini Omni; client plays it in-memory and does NOT persist it)
     /**
      * Model Operation - tracks instant model's operation(s) state, primarily for hosted tools.
      * - state is 'active' unless specified otherwise, 'error' is done too
@@ -799,6 +857,7 @@ export namespace AixWire_Particles {
     | { p: 'urlc', title: string, url: string, num?: number, from?: number, to?: number, text?: string, pubTs?: number } // url citation - pubTs: publication timestamp
     | { p: 'hres' } & ( // hosted resource - provider-hosted resource
       | { kind: 'vnd.ant.file', fileId: string, containerId?: string }
+      | { kind: 'vnd.gem.file', fileName: string, mimeType: string, isVideo?: boolean } // [Gemini Omni] Files-API artifact (e.g. delivery:uri video): re-fetchable by `files/{id}` name for ~48h via the key-proxied Gemini download route
       | { kind: 'vnd.oai.container_file', fileId: string, containerId: string, filename?: string } // OpenAI code-interpreter container file (download via /v1/containers/.../files/.../content)
       | { kind: 'inline-download', mimeType: string, b64: string, filename?: string } // inline bytes (e.g. Gemini code-exec file): client downloads & discards, never stored/re-fetchable
       )
@@ -807,8 +866,7 @@ export namespace AixWire_Particles {
       | { vendor: 'openai-container', state: { container: { id: string; expiresAt: string } } } // message-level - OpenAI Responses code-interpreter container reuse; 20min TTL stamped by parser
       | { vendor: 'gemini-envid', state: { environment: { id: string; expiresAt: string | null } } } // message-level - Gemini Interactions sandbox handle (today: Antigravity); 7d TTL stamped by parser
       | { vendor: 'gemini', state: { thoughtSignature: string } } // fragment-level
-      | { vendor: 'openai', state: { reasoningItem: { id?: string, encryptedContent?: string } } } // fragment-level (attach to ma reasoning fragment)
-      | { vendor: 'xai', state: { reasoningItem: { id?: string, encryptedContent?: string } } } // fragment-level - DISTINCT from openai (different encryption keys, different server-side ids)
+      | { vendor: AixWire_Vendors.RspVendor, state: { reasoningItem?: { id?: string, encryptedContent?: string }, messagePhase?: 'commentary' | 'final_answer' } } // fragment-level, one namespace per Responses vendor (AixWire_Vendors.RSP_VENDORS): reasoningItem attaches to the last (ma) fragment; messagePhase breaks + tags the NEXT text fragment. Vendor-private (keys + server-side ids), never crosses namespaces
       // | { vendor: string, state: Record<string, unknown> } // disable catch-all becasue it forces casts in type discriminations
       )
     ;

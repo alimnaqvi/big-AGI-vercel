@@ -65,6 +65,9 @@ interface AppChatStore {
   filterIsArchived: boolean;
   toggleFilterIsArchived: () => void;
 
+  filterOlderThanDays: number | null;
+  setFilterOlderThanDays: (days: number | null) => void;
+
   micTimeoutMs: number;
   setMicTimeoutMs: (micTimeoutMs: number) => void;
 
@@ -82,6 +85,10 @@ interface AppChatStore {
 
   showToolbarNavigation: boolean;
   toggleShowToolbarNavigation: () => void;
+
+  // browser-storage disclaimer (warning shown at the bottom of the chat list)
+  storageWarningDismissed: boolean;
+  dismissStorageWarning: () => void;
 
   // other chat-specific configuration
 
@@ -126,7 +133,7 @@ const useAppChatStore = create<AppChatStore>()(persist(
 
     // Chat UI
 
-    clearFilters: () => _set({ filterIsArchived: false, filterHasBeamOpen: false, filterHasDocFragments: false, filterHasImageAssets: false, filterHasStars: false }),
+    clearFilters: () => _set({ filterIsArchived: false, filterHasBeamOpen: false, filterHasDocFragments: false, filterHasImageAssets: false, filterHasStars: false, filterOlderThanDays: null }),
 
     filterHasBeamOpen: false,
     toggleFilterHasBeamOpen: () => _set(({ filterHasBeamOpen }) => ({ filterHasBeamOpen: !filterHasBeamOpen })),
@@ -142,6 +149,9 @@ const useAppChatStore = create<AppChatStore>()(persist(
 
     filterIsArchived: false,
     toggleFilterIsArchived: () => _set(({ filterIsArchived }) => ({ filterIsArchived: !filterIsArchived })),
+
+    filterOlderThanDays: null,
+    setFilterOlderThanDays: (filterOlderThanDays: number | null) => _set({ filterOlderThanDays }),
 
     micTimeoutMs: 5000,
     setMicTimeoutMs: (micTimeoutMs: number) => _set({ micTimeoutMs }),
@@ -162,6 +172,10 @@ const useAppChatStore = create<AppChatStore>()(persist(
     // on by default; no setting UI on `main` (the breadcrumb shows the chat title in the top bar); `dev` adds the toggle
     showToolbarNavigation: true,
     toggleShowToolbarNavigation: () => _set(({ showToolbarNavigation }) => ({ showToolbarNavigation: !showToolbarNavigation })),
+
+    // browser-storage disclaimer: shown until the user acknowledges it (persisted, so it survives reloads but not a cache clear - which is exactly the event it warns about)
+    storageWarningDismissed: false,
+    dismissStorageWarning: () => _set({ storageWarningDismissed: true }),
 
     // Other chat-specific configuration
 
@@ -260,9 +274,11 @@ export function useChatDrawerFilters() {
     filterHasImageAssets: state.filterHasImageAssets,
     filterHasStars: state.filterHasStars,
     filterIsArchived: state.filterIsArchived,
+    filterOlderThanDays: state.filterOlderThanDays,
     showPersonaIcons: state.showPersonaIcons2,
     showRelativeSize: state.showRelativeSize,
     clearFilters: state.clearFilters,
+    setFilterOlderThanDays: state.setFilterOlderThanDays,
     toggleFilterHasBeamOpen: state.toggleFilterHasBeamOpen,
     toggleFilterHasDocFragments: state.toggleFilterHasDocFragments,
     toggleFilterHasImageAssets: state.toggleFilterHasImageAssets,
@@ -284,6 +300,10 @@ export const useChatShowSystemMessages = (): [boolean, (showSystemMessages: bool
 
 export const useChatShowToolbarNavigation = (): boolean =>
   useAppChatStore(state => state.showToolbarNavigation);
+
+export function useChatStorageWarning(): [boolean, () => void] {
+  return useAppChatStore(useShallow(state => [state.storageWarningDismissed, state.dismissStorageWarning]));
+}
 
 export const getIsNotificationEnabledForModel = (modelId: DLLMId): boolean =>
   useAppChatStore.getState().isNotificationEnabledForModel(modelId);

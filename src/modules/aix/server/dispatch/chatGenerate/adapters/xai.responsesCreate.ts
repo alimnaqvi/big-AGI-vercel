@@ -4,7 +4,7 @@ import type { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage,
 import { XAIWire_API_Responses, XAIWire_Responses_Tools } from '../../wiretypes/xai.wiretypes';
 
 import { aixDocPart_to_OpenAITextContent, aixMetaRef_to_OpenAIText, aixTexts_to_OpenAIInstructionText } from './openai.chatCompletions';
-import { aixSpillShallFlush, aixSpillSystemToUser, approxDocPart_To_String } from './adapters.common';
+import { aixSpillShallFlush, aixSpillSystemToUser, approxDocPart_To_String, approxMediaUrlPart_To_String } from './adapters.common';
 
 
 // configuration
@@ -95,6 +95,8 @@ export function aixToXAIResponses(
   }
 
   // Reasoning
+  // - grok-4.6:                  low/medium/high/xhigh (always-on reasoning, 'none' rejected; vendor default high)
+  // - grok-4.5:                  low/medium/high/xhigh (always-on reasoning, 'none' rejected)
   // - grok-4.3:                  none/low(default)/medium/high
   // - grok-4.20-multi-agent:     low/medium/high/xhigh (4 vs 16 agents)
   // - grok-4.20 reasoning/non-reasoning: no effort param (slug selects mode)
@@ -263,6 +265,14 @@ function _toXAIResponsesInput(
                 type: 'input_image',
                 detail: 'high',
                 image_url: base64DataUrl,
+              });
+              break;
+
+            case 'media_url':
+              // URL-referenced video: no native lowering - honest text degradation
+              getUserMessage().content.push({
+                type: 'input_text',
+                text: approxMediaUrlPart_To_String(part),
               });
               break;
 
@@ -467,8 +477,9 @@ function _toXAIToolChoice(policy: AixTools_ToolsPolicy): XAIWire_Responses_Tools
       return 'auto';
     case 'any':
       return 'required';
-    case 'function_call':
-      return { type: 'function', name: policy.function_call.name };
+    // DISABLED 2026-07-17 - forced named tool, see ToolsPolicy_schema
+    // case 'function_call':
+    //   return { type: 'function', name: policy.function_call.name };
     default:
       const _exhaustiveCheck: never = policy;
       throw new Error(`Unsupported XAI tools policy type: ${(policy as any).type}`);

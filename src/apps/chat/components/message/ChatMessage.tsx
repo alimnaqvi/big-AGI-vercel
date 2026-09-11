@@ -127,6 +127,7 @@ export function ChatMessage(props: {
   isImagining?: boolean,
   isSpeaking?: boolean,
   hideAvatar?: boolean,
+  blocksStretch?: boolean, // overrides 'messageFullWidth'
   showAntPromptCaching?: boolean,
   showBlocksDate?: boolean,
   showUnsafeHtmlCode?: boolean,
@@ -165,10 +166,11 @@ export function ChatMessage(props: {
   const attachmentsEditRef = React.useRef<EditModeAttachmentsHandle>(null);
 
   // external state
-  const { adjContentScaling, disableMarkdown, doubleClickToEdit, uiComplexityMode } = useUIPreferencesStore(useShallow(state => ({
+  const { adjContentScaling, disableMarkdown, doubleClickToEdit, messageFullWidth, uiComplexityMode } = useUIPreferencesStore(useShallow(state => ({
     adjContentScaling: adjustContentScaling(state.contentScaling, props.adjustContentScaling),
     disableMarkdown: state.disableMarkdown,
     doubleClickToEdit: state.doubleClickToEdit,
+    messageFullWidth: state.messageFullWidth,
     uiComplexityMode: state.complexityMode,
   })));
 
@@ -805,7 +807,7 @@ export function ChatMessage(props: {
               imageAttachments={imageAttachments}
               contentScaling={adjContentScaling}
               messageRole={messageRole}
-              disabled={isEditingText}
+              isEditing={isEditingText}
               onFragmentDelete={!onMessageFragmentDelete ? undefined : handleFragmentDelete}
             />
           )}
@@ -831,6 +833,7 @@ export function ChatMessage(props: {
 
             contentScaling={adjContentScaling}
             uiComplexityMode={uiComplexityMode}
+            blocksStretch={props.blocksStretch ?? messageFullWidth}
             fitScreen={props.fitScreen}
             isMobile={props.isMobile}
             messageRole={messageRole}
@@ -892,7 +895,7 @@ export function ChatMessage(props: {
               imageAttachments={imageAttachments}
               contentScaling={adjContentScaling}
               messageRole={messageRole}
-              disabled={isEditingText}
+              isEditing={isEditingText}
               onFragmentDelete={!onMessageFragmentDelete ? undefined : handleFragmentDelete}
             />
           )}

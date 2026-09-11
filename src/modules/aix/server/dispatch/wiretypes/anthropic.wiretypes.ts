@@ -13,6 +13,28 @@ const hotFixAntShipNoEmptyTextBlocks = true; // Replace empty text blocks with a
  *
  * ## Updates
  *
+ * ### 2026-09-01 - API Sync: Claude Fable 5.1 / Mythos 5.1 (launch-verified live)
+ * - Request.thinking: added `block_binding.prefix_mismatch_behavior` ('error'|'drop_block'; beta thinking-binding-controls-2026-08-01).
+ *   Preserved thinking: Fable 5.1 blocks replay only on Fable/Mythos 5.1+ (older models drop them, unbilled) and, for accounts
+ *   created >= 2026-08-31, only against an unchanged system/tools/history prefix (400 otherwise). The adapter sends 'drop_block' on
+ *   every thinking request and relays the drops to the client as 'input-transform' particles (one per reason).
+ * - Response: added `input_transformations` ([{ type: 'thinking_dropped', path, reason }], header-gated; on message_start when streaming)
+ * - Models: claude-fable-5-1 / claude-mythos-5-1 - Fable 5's surface; forced tool_choice still 400 (reworded), the adapter's downgrade covers '-5-1'
+ * - Request.thinking.display: added 'updates' (beta thinking-display-updates-2026-08-18) - progress lines only; not sent, 'summarized' includes them
+ * - NOT adopted (beta): per-message effort (mid-conversation-output-config-2026-07-01), turn-scoped system messages (mid-conversation-system-clear-at-2026-08-21)
+ *
+ * ### 2026-06-30 - API Sync: new tool versions, refusal categories, Sonnet 5 verified
+ * - Tools: Added web_search_20260318 / web_fetch_20260318 (GA, 2026-06-11) - adds `response_inclusion` ('full'|'excluded')
+ *   to drop the nested search/fetch call+result pair from the response once consumed by a completed code-execution call
+ *   (dynamic filtering). Wired as the new default for the dynamic-filtering path (replacing _20260209); `response_inclusion`
+ *   left unset (defaults to 'full') - this is purely the version bump, no behavior change.
+ * - StopDetails.category: added 'frontier_llm', 'military_weapons' (current docs list these alongside 'cyber'/'bio'/'reasoning_extraction')
+ * - Verified empirically against the live API: Claude Sonnet 5 (launched 2026-06-29) breaking changes (temperature/top_p/top_k
+ *   rejected, manual thinking budget rejected, but thinking.disabled and forced tool_choice both OK unlike Fable/Mythos 5) -
+ *   existing adapter logic already handles all of these correctly via LLM_IF_HOTFIX_NoTemperature + per-model thinking-budget plumbing.
+ * - NOT adopted (tracked in anthropic.parser.ts top comment): mid-conversation system messages (role: 'system', Opus 4.8
+ *   only, GA 2026-05-28) - appends operator-priority instructions mid-`messages` without invalidating the cached prefix.
+ *
  * ### 2026-06-09 - API Sync: Claude Fable 5 / Mythos 5, forward-compatible parsing
  * - StopDetails.category: added 'reasoning_extraction' (Fable 5 ToS classifier for reverse engineering / output duplication)
  * - StopDetails: added `recommended_model` (suggested retry model when a server-side fallback could not run)
@@ -802,6 +824,18 @@ export namespace AnthropicWire_Tools {
     use_cache: z.boolean().optional(), // default true; set false to bypass cache and fetch fresh content
   });
 
+  /**
+   * [Anthropic, 2026-06-11 GA] Latest - adds `response_inclusion`.
+   * When the fetch was called programmatically from a completed code-execution call (dynamic filtering), 'excluded'
+   * drops the nested server_tool_use(web_fetch) + web_fetch_tool_result pair from the response entirely (verified
+   * empirically: ~98% response size reduction on a full page fetch). Default 'full' (unchanged from prior versions).
+   * Direct calls, or code-execution calls that paused before completing, are always returned in full regardless.
+   */
+  const _WebFetchTool_20260318_schema = _WebFetchTool_20260309_schema.extend({
+    type: z.literal('web_fetch_20260318'),
+    response_inclusion: z.enum(['full', 'excluded']).optional(), // default: 'full'
+  });
+
   // -- Web Search Tools --
 
   const _WebSearchTool_20250305_schema = _ToolDefinitionBase_schema.extend({
@@ -813,9 +847,15 @@ export namespace AnthropicWire_Tools {
     user_location: z.any().nullish(), // UserLocation schema
   });
 
-  /** [Anthropic, Feb 2026 GA] Web search v2 - latest. */
+  /** [Anthropic, Feb 2026 GA] Web search v2. */
   const _WebSearchTool_20260209_schema = _WebSearchTool_20250305_schema.extend({
     type: z.literal('web_search_20260209'),
+  });
+
+  /** [Anthropic, 2026-06-11 GA] Latest - adds `response_inclusion`, see _WebFetchTool_20260318_schema for semantics. */
+  const _WebSearchTool_20260318_schema = _WebSearchTool_20260209_schema.extend({
+    type: z.literal('web_search_20260318'),
+    response_inclusion: z.enum(['full', 'excluded']).optional(), // default: 'full'
   });
 
 
@@ -835,8 +875,10 @@ export namespace AnthropicWire_Tools {
     _WebFetchTool_20250910_schema,
     _WebFetchTool_20260209_schema,
     _WebFetchTool_20260309_schema,
+    _WebFetchTool_20260318_schema,
     _WebSearchTool_20250305_schema,
     _WebSearchTool_20260209_schema,
+    _WebSearchTool_20260318_schema,
   ]);
 
 }
@@ -878,7 +920,7 @@ export namespace AnthropicWire_API_Message_Create {
    */
   const StopDetails_schema = z.object({
     type: z.enum(['refusal']).or(z.string()),
-    category: z.enum(['cyber', 'bio', 'reasoning_extraction']).or(z.string()).nullish(),
+    category: z.enum(['cyber', 'bio', 'reasoning_extraction', 'frontier_llm', 'military_weapons']).or(z.string()).nullish(),
     explanation: z.string().nullish(),
     /** [Anthropic, 2026-06-09] Model suggested for a direct retry when a server-side fallback could not run (e.g. fallback model rate-limited). Hint only, may be null. */
     recommended_model: z.string().nullish(),
@@ -887,6 +929,15 @@ export namespace AnthropicWire_API_Message_Create {
   /// Request
 
   export type Request = z.infer<typeof Request_schema>;
+  /**
+   * [Anthropic, 2026-09-01] Preserved-thinking controls (beta `thinking-binding-controls-2026-08-01`): what to do with a replayed
+   * thinking block whose conversation prefix changed (Fable 5.1+) - 'error' (default) 400s, 'drop_block' drops it and every later
+   * thinking block, reported in the response `input_transformations`. Requires the header; Bedrock rejects the field.
+   */
+  const ThinkingBlockBinding_schema = z.object({
+    prefix_mismatch_behavior: z.enum(['error', 'drop_block']),
+  });
+
   export const Request_schema = z.object({
     /**
      * (required) The maximum number of tokens to generate before stopping.
@@ -999,18 +1050,22 @@ export namespace AnthropicWire_API_Message_Create {
      * When enabled, responses include thinking content blocks showing Claude's thinking process before the final answer.
      *
      * - display: 'omitted': empty thinking field, preserves signature for multi-turn, faster streaming
+     * - block_binding: [2026-09-01] preserved-thinking controls, see ThinkingBlockBinding_schema
      */
     thinking: z.union([
       // [Anthropic, 4.6+] Adaptive thinking - Claude decides when and how much to think
       z.object({
         type: z.literal('adaptive'),
-        display: z.enum(['summarized' /* default */, 'omitted']).optional(),
+        // 'updates' (beta thinking-display-updates-2026-08-18): progress lines between tool calls only - 400 without the header
+        display: z.enum(['summarized' /* default */, 'omitted', 'updates']).optional(),
+        block_binding: ThinkingBlockBinding_schema.optional(),
       }),
       // Requires a minimum budget of 1,024 tokens and counts towards your max_tokens limit.
       z.object({
         type: z.literal('enabled'),
         budget_tokens: z.number(),
         display: z.enum(['summarized' /* default */, 'omitted']).optional(),
+        block_binding: ThinkingBlockBinding_schema.optional(),
       }),
       // having this for completeness, but seems like it's not needed / can be omitted
       z.object({ type: z.literal('disabled') }),
@@ -1047,8 +1102,10 @@ export namespace AnthropicWire_API_Message_Create {
     top_p: z.number().optional(),
 
     /**
-     * [Anthropic, fast-mode-2026-02-01] Accelerated inference mode.
-     * Preview/waitlist. Only supported on Claude Opus 4.6/4.7/4.8 (4.6 tier deprecated 2026-05-28; not available on Fable 5).
+     * [Anthropic, fast-mode-2026-02-01] Accelerated inference mode (research preview, waitlist; up to 2.5x OTPS at 2x price).
+     * Only supported on Claude Opus 5 and Opus 4.8 (2026-07-24: Opus 4.7 returns 400; Opus 4.6 silently runs standard,
+     * see `usage.speed`). Not available on Fable 5 / Sonnet 5, Batch API, Priority Tier, or partner clouds.
+     * Note: switching speeds invalidates the prompt cache - requests at different speeds do not share cached prefixes.
      */
     speed: z.enum(['fast']).optional(),
 
@@ -1097,6 +1154,17 @@ export namespace AnthropicWire_API_Message_Create {
     stop_details: StopDetails_schema.nullish(),
 
     /**
+     * [Anthropic, 2026-09-01] Thinking blocks dropped from the request, only with the `thinking-binding-controls-2026-08-01` header.
+     * reason: 'model_binding_mismatch' (an older model can't read a newer block) | 'prefix_binding_mismatch' (history edited, with
+     * block_binding 'drop_block'). Streaming: on the message_start message. Loosely typed for forward-compat.
+     */
+    input_transformations: z.array(z.object({
+      type: z.string(), // 'thinking_dropped'
+      path: z.string(), // 'messages.1.content.0'
+      reason: z.string(),
+    })).nullish(),
+
+    /**
      * Billing and rate-limit usage.
      * Token counts represent the underlying cost to Anthropic's systems.
      */
@@ -1119,6 +1187,9 @@ export namespace AnthropicWire_API_Message_Create {
         tool_search_requests: z.number().optional(), // [Anthropic, 2025-11-24] Tool Search Tool usage
       }).nullish(),
       service_tier: z.enum(['standard', 'priority', 'batch']).nullish(),
+      // [Anthropic, fast-mode-2026-02-01] actual speed used - present ONLY when the request included `speed`
+      // (probe-verified 2026-07-24: absent on standard requests; Opus 4.6 reports 'standard' on its silent fast->standard fallback)
+      speed: z.enum(['fast', 'standard']).nullish(),
       inference_geo: z.string().nullish(),
     }),
 

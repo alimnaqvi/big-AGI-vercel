@@ -46,9 +46,10 @@ import { ChatBeamWrapper } from './components/ChatBeamWrapper';
 import { ChatDrawerMemo } from './components/layout-drawer/ChatDrawer';
 import { ChatMessageList } from './components/ChatMessageList';
 import { Composer } from './components/composer/Composer';
+import { LiveSvgAnimator } from './components/live-svg/LiveSvgAnimator';
 import { PaneTitleOverlay } from './components/PaneTitleOverlay';
 import { useComposerAutoHide } from './components/composer/useComposerAutoHide';
-import { usePanesManager } from './components/panes/store-panes-manager';
+import { getOtherPanesConversationIds, usePanesManager } from './components/panes/store-panes-manager';
 
 import type { ChatExecuteMode } from './execute-mode/execute-mode.types';
 
@@ -93,7 +94,7 @@ const chatBeamWrapperSx: SxProps = {
 const composerOpenSx: SxProps = {
   // NOTE: disabled on 2025-03-05: conflicts with the GlobalDragOverlay's
   // zIndex: 21, // just to allocate a surface, and potentially have a shadow
-  minWidth: { md: 480 }, // don't get compresses too much on desktop
+  minWidth: { md: 460 }, // don't get compresses too much on desktop
   // backgroundColor: themeBgAppChatComposer, // inlined in the Composer
   transition: 'background-color 0.5s ease-out',
   borderTop: `1px solid`,
@@ -135,6 +136,7 @@ export function AppChat() {
   const personaDropdownRef = React.useRef<OptimaBarControlMethods>(null);
   const composerTextAreaRef = React.useRef<HTMLTextAreaElement>(null);
   const [_activeFolderId, setActiveFolderId] = React.useState<string | null>(null);
+  const [liveSvgModeActive, setLiveSvgModeActive] = React.useState(false);
 
   // external state
   const theme = useTheme();
@@ -179,7 +181,6 @@ export function AppChat() {
   const beamOpenStoreInFocusedPane = focusedPaneIndex === null ? null
     : !beamsOpens?.[focusedPaneIndex] ? null
       : paneBeamStores?.[focusedPaneIndex] ?? null;
-  const focusedChatBeamOpen = focusedPaneIndex !== null && !!beamsOpens?.[focusedPaneIndex];
 
   const {
     // focused
@@ -210,7 +211,7 @@ export function AppChat() {
 
   // Composer Auto-hiding
   const isChromeless = useOptimaChromeless() && isMobile; // auto-hide on Chromeless too
-  const forceComposerHide = isChromeless || !!beamOpenStoreInFocusedPane /* || !focusedPaneConversationId */; // auto-hide when no chat (the 'please select a conversation...' state) doesn't feel good
+  const forceComposerHide = liveSvgModeActive || isChromeless || !!beamOpenStoreInFocusedPane /* || !focusedPaneConversationId */; // auto-hide when no chat (the 'please select a conversation...' state) doesn't feel good
   const composerAutoHide = useComposerAutoHide(forceComposerHide, composerHasContent);
 
   // Window actions
@@ -345,7 +346,9 @@ export function AppChat() {
   const handleConversationNewInFocusedPane = React.useCallback((forceNoRecycle: boolean, isIncognito: boolean) => {
 
     // create conversation (or recycle the existing top-of-stack empty conversation)
-    const conversationId = (recycleNewConversationId && !forceNoRecycle && !isIncognito)
+    // never recycle a chat shown in another pane: both panes would end up on the same chat
+    const recycleShownElsewhere = !!recycleNewConversationId && getOtherPanesConversationIds().includes(recycleNewConversationId);
+    const conversationId = (recycleNewConversationId && !forceNoRecycle && !isIncognito && !recycleShownElsewhere)
       ? recycleNewConversationId
       : prependNewConversation(getConversationSystemPurposeId(focusedPaneConversationId) ?? undefined, isIncognito);
 
@@ -449,7 +452,9 @@ export function AppChat() {
     const nextConversationId = deleteConversations(conversationIds, /*focusedSystemPurposeId ??*/ undefined);
 
     // switch the focused pane to the new conversation - NOTE: this makes the assumption that deletion had impact on the focused pane
-    handleOpenConversationInFocusedPane(nextConversationId);
+    // unless another pane shows it (the panes store then re-targets to a distinct chat, or unsplits) - two panes must not share a chat
+    if (!getOtherPanesConversationIds().includes(nextConversationId))
+      handleOpenConversationInFocusedPane(nextConversationId);
 
     // run GC for dblobs in this conversation
     void gcChatImageAssets(); // fire/forget
@@ -479,7 +484,6 @@ export function AppChat() {
         activeFolderId={activeFolderId}
         chatPanesConversationIds={paneUniqueConversationIds}
         disableNewButton={disableNewButton}
-        focusedChatBeamOpen={focusedChatBeamOpen}
         onConversationActivate={handleOpenConversationInFocusedPane}
         onConversationBranch={handleConversationBranch}
         onConversationNew={handleConversationNewInFocusedPane}
@@ -488,7 +492,7 @@ export function AppChat() {
         onConversationsImportDialog={handleConversationImportDialog}
         setActiveFolderId={setActiveFolderId}
       />,
-    [activeFolderId, disableNewButton, focusedChatBeamOpen, focusedPaneConversationId, handleConversationBranch, handleConversationExport, handleConversationImportDialog, handleConversationNewInFocusedPane, handleDeleteConversations, handleOpenConversationInFocusedPane, isDrawerOpen, paneUniqueConversationIds],
+    [activeFolderId, disableNewButton, focusedPaneConversationId, handleConversationBranch, handleConversationExport, handleConversationImportDialog, handleConversationNewInFocusedPane, handleDeleteConversations, handleOpenConversationInFocusedPane, isDrawerOpen, paneUniqueConversationIds],
   );
 
   const focusedChatPanelContent = React.useMemo(() => !focusedPaneConversationId ? null :
@@ -605,6 +609,8 @@ export function AppChat() {
     { key: 'p', ctrl: true, action: () => personaDropdownRef.current?.openListbox() /*, description: 'Open Persona Dropdown'*/ },
     // focused conversation llm
     { key: 'o', ctrl: true, shift: true, action: handleOpenChatLlmOptions },
+    // fun modes (live svg)
+    { key: 's', ctrl: true, shift: true, action: () => setLiveSvgModeActive(prev => !prev) },
   ], [beamOpenStoreInFocusedPane, focusedPaneConversationId, handleConversationNewInFocusedPane, handleConversationReset, handleConversationsImportFormFilePicker, handleDeleteConversations, handleFileSaveConversation, handleMessageBeamLastInFocusedPane, handleMessageRegenerateLastInFocusedPane, handleMoveFocus, handleNavigateHistoryInFocusedPane, handleOpenChatLlmOptions, isFocusedChatEmpty]));
 
 
@@ -615,6 +621,9 @@ export function AppChat() {
     <OptimaDrawerIn>{drawerContent}</OptimaDrawerIn>
     <OptimaPanelIn>{focusedChatPanelContent}</OptimaPanelIn>
 
+    {liveSvgModeActive ? (
+      <LiveSvgAnimator isMobile={isMobile} />
+    ) : (
     <PanelGroup
       direction={(isMobile || isTallScreen) ? 'vertical' : 'horizontal'}
       id='app-chat-panels'
@@ -747,6 +756,7 @@ export function AppChat() {
       })}
 
     </PanelGroup>
+    )}
 
     {/* Composer with auto-hide */}
     <Box {...composerAutoHide.compressorProps}>

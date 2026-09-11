@@ -1,4 +1,5 @@
 import { findServiceAccessOrThrow } from '~/modules/llms/vendors/vendor.helpers';
+import { ortWebToolsToAixModel } from '~/modules/llms/vendors/openrouter/openrouter.webtools';
 
 import { vertexLinksAutoResolveFragments } from '~/modules/google/vertexai.client';
 
@@ -17,6 +18,8 @@ import { getLabsLosslessImages } from '~/common/stores/store-ux-labs';
 import { llmChatPricing_adjusted } from '~/common/stores/llms/llms.pricing';
 import { metricsStoreAddChatGenerate } from '~/common/stores/metrics/store-metrics';
 import { stripUndefined } from '~/common/util/objectUtils';
+import { videoPlayObjectUrl } from '~/common/util/video/videoPlayManaged';
+import { wakeLockHold } from '~/common/util/screenWakeLock';
 import { webGeolocationCached } from '~/common/util/webGeolocationUtils';
 
 
@@ -75,8 +78,8 @@ export function aixCreateModelFromLLMOptions(
     llmVndBedrockAPI,
     llmVndGeminiAgentViz, llmVndGeminiAspectRatio, llmVndGeminiImageSize, llmVndGeminiCodeExecution, llmVndGeminiComputerUse, llmVndGeminiGoogleSearch, llmVndGeminiMediaResolution, llmVndGeminiThinkingBudget,
     // llmVndMoonshotWebSearch,
-    llmVndOaiRestoreMarkdown, llmVndOaiVerbosity, llmVndOaiWebSearchContext, llmVndOaiWebSearchGeolocation, llmVndOaiImageGeneration, llmVndOaiCodeInterpreter,
-    llmVndOrtWebSearch,
+    llmVndOaiReasoningMode, llmVndOaiRestoreMarkdown, llmVndOaiServiceTier, llmVndOaiVerbosity, llmVndOaiWebSearchContext, llmVndOaiWebSearchGeolocation, llmVndOaiImageGeneration, llmVndOaiCodeInterpreter,
+    llmVndOrtWebFetch, llmVndOrtWebSearch, llmVndOrtWebToolsAdvanced,
     llmVndPerplexityDateFilter, llmVndPerplexitySearchMode,
     llmVndXaiCodeExecution, llmVndXaiSearchInterval, llmVndXaiWebSearch, llmVndXaiXSearch, llmVndXaiXSearchHandles,
   } = {
@@ -103,7 +106,9 @@ export function aixCreateModelFromLLMOptions(
   const llmVndGeminiInteractions = llmInterfaces.includes(LLM_IF_GEM_Interactions);
 
   // Client-side late stage model HotFixes
-  const hotfixOmitTemperature = llmInterfaces.includes(LLM_IF_HOTFIX_NoTemperature);
+  // [2026-07-09, OpenAI] effort 'none' unlocks temperature on NoTemperature reasoning models (sweep-verified 0..2 on
+  // GPT-5.x at reasoning_effort=none); only OpenAI defs combine the hotfix with llmVndOaiEffort, so the bypass is vendor-scoped
+  const hotfixOmitTemperature = llmInterfaces.includes(LLM_IF_HOTFIX_NoTemperature) && llmVndOaiEffort !== 'none';
 
   // User Geolocation
   let userGeolocation: AixAPI_Model['userGeolocation'] | undefined;
@@ -164,15 +169,17 @@ export function aixCreateModelFromLLMOptions(
     // ...(llmVndMoonshotWebSearch === 'auto' ? { vndMoonshotWebSearch: 'auto' } : {}),
 
     // OpenAI
+    ...(llmVndOaiReasoningMode ? { vndOaiReasoningMode: llmVndOaiReasoningMode } : {}),
+    ...(llmVndOaiServiceTier ? { vndOaiServiceTier: llmVndOaiServiceTier } : {}),
     ...(llmVndOaiResponsesAPI ? { vndOaiResponsesAPI: true } : {}),
     ...(llmVndOaiRestoreMarkdown ? { vndOaiRestoreMarkdown: llmVndOaiRestoreMarkdown } : {}),
     ...(llmVndOaiVerbosity ? { vndOaiVerbosity: llmVndOaiVerbosity } : {}),
     ...(llmVndOaiWebSearchContext ? { vndOaiWebSearchContext: llmVndOaiWebSearchContext } : {}),
-    ...(llmVndOaiImageGeneration ? { vndOaiImageGeneration: (llmVndOaiImageGeneration as any /* backward comp */) === true ? 'mq' : llmVndOaiImageGeneration } : {}),
+    ...(llmVndOaiImageGeneration ? { vndOaiImageGeneration: llmVndOaiImageGeneration } : {}), // legacy values are migrated by getAllModelParameterValues
     ...(llmVndOaiCodeInterpreter === 'auto' ? { vndOaiCodeInterpreter: llmVndOaiCodeInterpreter } : {}),
 
-    // OpenRouter
-    ...(llmVndOrtWebSearch === 'auto' ? { vndOrtWebSearch: 'auto' } : {}),
+    // OpenRouter - server tools, or the legacy plugin on endpoints without tool support
+    ...ortWebToolsToAixModel(llmInterfaces, llmVndOrtWebSearch, llmVndOrtWebFetch, llmVndOrtWebToolsAdvanced),
 
     // Perplexity
     ...(llmVndPerplexityDateFilter ? { vndPerplexityDateFilter: llmVndPerplexityDateFilter } : {}),
@@ -690,7 +697,7 @@ function _finalizeLlmMetricsWithCosts(cgMetricsLg: undefined | DMetricsChatGener
 
   // Compute costs
   const logLlmRefId = getAllModelParameterValues(llm.initialParameters, llm.userParameters).llmRef || llm.id;
-  const adjChatPricing = llmChatPricing_adjusted(llm);
+  const adjChatPricing = llmChatPricing_adjusted(llm, cgMetricsLg?.$xPrice); // the served tier (when echoed) wins over the requested one
   const costs = metricsComputeChatGenerateCostsMd(metricsMd, adjChatPricing, logLlmRefId);
   if (!costs) {
     // FIXME: we shall warn that the costs are missing, as the only way to get pricing is through surfacing missing prices
@@ -821,6 +828,18 @@ export interface AixChatGenerateContent_LL_Result extends AixChatGenerateContent
  */
 export type AixChatGenerateTerminal_LL = 'completed' | 'aborted' | 'failed';
 
+
+async function _aixChatGenerateContent_LL(...args: Parameters<typeof _aixChatGenerateContent_LL_unlocked>): Promise<AixChatGenerateContent_LL_Result> {
+  // [mobile] hold the screen wake lock for the whole generation - a locked screen kills the stream; ref-counted across parallel generations (Beam)
+  const wakeLockRelease = wakeLockHold(`aix:${args[3].name}` /* aixContext */);
+  try {
+    return await _aixChatGenerateContent_LL_unlocked(...args);
+  } finally {
+    wakeLockRelease();
+  }
+}
+
+
 /**
  * LL (Level 1) - Client-side ChatGenerateContent, with optional streaming.
  *
@@ -857,7 +876,7 @@ export type AixChatGenerateTerminal_LL = 'completed' | 'aborted' | 'failed';
  * @throws Error if there are rare LL errors, or if [CSF] client-side fails to load
  *
  */
-async function _aixChatGenerateContent_LL(
+async function _aixChatGenerateContent_LL_unlocked(
   // aix inputs
   aixAccess: AixAPI_Access,
   aixModel: AixAPI_Model,
@@ -930,6 +949,10 @@ async function _aixChatGenerateContent_LL(
       void AudioPlayer.playUrl(audioUrl)
         .catch((error) => console.log('[AIX] Failed to play audio:', { error }))
         .finally(() => URL.revokeObjectURL(audioUrl));
+    },
+    (video) => {
+      // EXPERIMENTAL (Gemini Omni): play generated video in an ephemeral overlay; the object URL is revoked on close - nothing is persisted.
+      videoPlayObjectUrl(URL.createObjectURL(video.blob), video.label || 'AI Video');
     },
     abortSignal,
   );

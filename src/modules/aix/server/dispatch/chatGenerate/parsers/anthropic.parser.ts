@@ -74,6 +74,15 @@ const hotFixAntInjectToolsTextSpacer = true;
  * - Message Deltas will provide a 'stop reason' on the message
  * - Begin/End are explicit
  */
+
+// TODO (tracked, not implemented): Anthropic GA'd "mid-conversation system messages" 2026-05-28 (Opus 4.8 only so far) -
+// a `{role: 'system'}` message can be appended mid-`messages` (must immediately follow a user/tool-result turn, and
+// either end the array or precede an assistant turn) to inject operator-priority instructions without invalidating the
+// cached prefix - unlike editing the top-level `system` field, which busts the cache for everything after it. This is a
+// REQUEST-construction feature (would live in anthropic.messageCreate.ts's per-message content-block generator, not
+// here) - noted in this file as the spot we track Anthropic protocol deltas pending wider model support past Opus 4.8.
+// See: https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
+
 export function createAnthropicMessageParser(): ChatGenerateParseFunction {
   const parserCreationTimestamp = Date.now();
   let responseMessage: AnthropicWire_API_Message_Create.Response;
@@ -136,20 +145,13 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
           if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant message_start: container=${responseMessage.container.id}`);
         }
 
+        // -> [2026-09-01] Preserved thinking: replayed thinking blocks the API dropped (edited history, or a model switch)
+        if (responseMessage.input_transformations?.length)
+          _sendInputTransforms(pt, responseMessage.input_transformations);
+
         if (responseMessage.usage) {
           chatInTokens = responseMessage.usage.input_tokens;
-          const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
-            TIn: chatInTokens,
-            TOut: responseMessage.usage.output_tokens,
-            dtStart: timeToFirstEvent,
-          };
-          if (responseMessage.usage.cache_read_input_tokens || responseMessage.usage.cache_creation_input_tokens) {
-            if (typeof responseMessage.usage.cache_read_input_tokens === 'number')
-              metricsUpdate.TCacheRead = responseMessage.usage.cache_read_input_tokens;
-            if (typeof responseMessage.usage.cache_creation_input_tokens === 'number')
-              metricsUpdate.TCacheWrite = responseMessage.usage.cache_creation_input_tokens;
-          }
-          pt.updateMetrics(metricsUpdate);
+          pt.updateMetrics({ ..._fromAnthropicUsage(responseMessage.usage), dtStart: timeToFirstEvent });
         }
 
         if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant message_start: model=${responseMessage.model}, TIn=${chatInTokens || 0}, container=${responseMessage.container?.id || 'none'}`);
@@ -433,20 +435,25 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
           pt.setTokenStopReason(tokenStopReason, _formatAnthropicStopError(delta.stop_details));
 
         // NOTE: we have more fields we're not parsing yet - https://platform.claude.com/docs/en/api/typescript/messages#message_delta_usage
-        if (usage?.output_tokens && messageStartTime) {
+        // Metrics: timing is emitted whenever we have a start reference, independent of upstream usage; token
+        // fields are added only when the usage block carries completion tokens (#1149).
+        if (messageStartTime) {
           const elapsedTimeMilliseconds = Date.now() - messageStartTime;
-          const elapsedTimeSeconds = elapsedTimeMilliseconds / 1000;
-          const chatOutRate = elapsedTimeSeconds > 0 ? usage.output_tokens / elapsedTimeSeconds : 0;
-          pt.updateMetrics({
-            TIn: chatInTokens !== undefined ? chatInTokens : -1,
-            TOut: usage.output_tokens,
-            // reasoning tokens are a subset of output_tokens (already in TOut) - surfaced as a breakdown, like OpenAI/Gemini
-            ...(typeof usage.output_tokens_details?.thinking_tokens === 'number' ? { TOutR: usage.output_tokens_details.thinking_tokens } : {}),
-            vTOutInner: Math.round(chatOutRate * 100) / 100, // Round to 2 decimal places
+          const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
             dtStart: timeToFirstEvent,
             dtInner: elapsedTimeMilliseconds,
             dtAll: Date.now() - parserCreationTimestamp,
-          });
+          };
+          if (usage?.output_tokens) {
+            const elapsedTimeSeconds = elapsedTimeMilliseconds / 1000;
+            const chatOutRate = elapsedTimeSeconds > 0 ? usage.output_tokens / elapsedTimeSeconds : 0;
+            // the delta carries the final input side (server tool results land here, not in message_start)
+            Object.assign(metricsUpdate, _fromAnthropicUsage(usage));
+            if (metricsUpdate.TIn === undefined)
+              metricsUpdate.TIn = chatInTokens ?? -1;
+            metricsUpdate.vTOutInner = Math.round(chatOutRate * 100) / 100; // Round to 2 decimal places
+          }
+          pt.updateMetrics(metricsUpdate);
         }
 
         if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant message_delta: stop_reason=${delta.stop_reason || 'none'}, TOut=${usage?.output_tokens || 'none'}`);
@@ -541,6 +548,7 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
       stop_reason,
       stop_details,
       usage,
+      input_transformations,
     } = AnthropicWire_API_Message_Create.Response_schema.parse(JSON.parse(fullData));
 
     // -> Model
@@ -550,6 +558,10 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
     // -> Container metadata (for Skills) - propagate to client via svs for cross-turn reuse
     if (container)
       _emitContainerState(pt, container);
+
+    // -> [2026-09-01] Preserved thinking: dropped replayed thinking blocks
+    if (input_transformations?.length)
+      _sendInputTransforms(pt, input_transformations);
 
     // -> Content Blocks - Non-Streaming
     for (let i = 0; i < content.length; i++) {
@@ -658,30 +670,13 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
         needsTextSeparator = hotFixAntInjectToolsTextSpacer;
     }
 
-    // -> Stats
-    if (usage) {
-      const elapsedTimeMilliseconds = Date.now() - parserCreationTimestamp;
-      // const elapsedTimeSeconds = elapsedTimeMilliseconds / 1000;
-      // const chatOutRate = elapsedTimeSeconds > 0 ? usage.output_tokens / elapsedTimeSeconds : 0;
-      const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
-        TIn: usage.input_tokens,
-        TOut: usage.output_tokens,
-        // vTOutInner: Math.round(chatOutRate * 100) / 100, // Round to 2 decimal places
-        // dtStart: // we don't know
-        // dtInner: // we don't know
-        dtAll: elapsedTimeMilliseconds,
-      };
-      if (usage.cache_read_input_tokens || usage.cache_creation_input_tokens) {
-        if (typeof usage.cache_read_input_tokens === 'number')
-          metricsUpdate.TCacheRead = usage.cache_read_input_tokens;
-        if (typeof usage.cache_creation_input_tokens === 'number')
-          metricsUpdate.TCacheWrite = usage.cache_creation_input_tokens;
-      }
-      // reasoning tokens are a subset of output_tokens (already in TOut) - surfaced as a breakdown, like OpenAI/Gemini
-      if (typeof usage.output_tokens_details?.thinking_tokens === 'number')
-        metricsUpdate.TOutR = usage.output_tokens_details.thinking_tokens;
-      pt.updateMetrics(metricsUpdate);
-    }
+    // -> Stats: timing always (measured locally); token/cache fields only when the usage block is present (#1149)
+    pt.updateMetrics({
+      ...(usage ? _fromAnthropicUsage(usage) : {}),
+      // vTOutInner: // we don't know the server-side rate
+      // dtStart / dtInner: // we don't know
+      dtAll: Date.now() - parserCreationTimestamp,
+    });
 
     // Continuation: when pause_turn, throw to trigger re-dispatch with accumulated content
     if (stop_reason === 'pause_turn')
@@ -728,6 +723,20 @@ function _emitContainerState(pt: IParticleTransmitter, container: { id: string; 
     vendor: 'anthropic',
     state: { container: { id: container.id, expiresAt: container.expires_at } },
   });
+}
+
+/** [2026-09-01] Preserved thinking: relay the replayed thinking blocks the API dropped, one particle per vendor reason (normalized to an AIX cause). */
+function _sendInputTransforms(pt: IParticleTransmitter, transforms: NonNullable<AnthropicWire_API_Message_Create.Response['input_transformations']>): void {
+  const pathsByReason = new Map<string, string[]>();
+  for (const { type, path, reason } of transforms) {
+    if (type !== 'thinking_dropped') {
+      aixResilientUnknownValue('Anthropic', 'inputTransformationType', type);
+      continue;
+    }
+    pathsByReason.set(reason, [...(pathsByReason.get(reason) ?? []), path]);
+  }
+  for (const [reason, paths] of pathsByReason)
+    pt.sendCGControl({ cg: 'input-transform', itt: 'thinking-dropped', cause: reason === 'prefix_binding_mismatch' ? 'history-edited' : reason === 'model_binding_mismatch' ? 'model-switch' : reason, reason, paths });
 }
 
 /** Compose a human-readable error string from Anthropic's stop_details. Returns undefined when nothing useful to surface. */
@@ -966,7 +975,7 @@ function _handleCBS_CodeExecutionToolResult(pt: IParticleTransmitter, block: Ext
       if (block.content.type === 'code_execution_result' && block.content.stdout)
         oTexts.push(_ellipsizeContext(block.content.stdout));
       else if (block.content.type === 'encrypted_code_execution_result')
-        oTexts.push('[Anthropic encrypted output]');
+        oTexts.push(`[Anthropic encrypted output, ${block.content.encrypted_stdout.length.toLocaleString()} bytes]`);
       if (block.content.stderr)
         oTexts.push('stderr: ' + _ellipsizeContext(block.content.stderr));
       const codeExecFailed = block.content.return_code !== 0;
@@ -1121,6 +1130,46 @@ function _createAnthropicPauseTurnContinuation(
   };
 }
 
+
+/** Usage -> counts, tool calls, served tier. One mapper for message_start, message_delta (final) and the non-streaming response. input_tokens excludes the cache classes. */
+function _fromAnthropicUsage(usage: {
+  input_tokens?: number | null,
+  output_tokens: number,
+  output_tokens_details?: { thinking_tokens: number } | null,
+  cache_read_input_tokens?: number | null,
+  cache_creation_input_tokens?: number | null,
+  server_tool_use?: { web_search_requests?: number } | null,
+  service_tier?: string | null,
+  inference_geo?: string | null,
+  speed?: string | null,
+}): AixWire_Particles.CGSelectMetrics {
+  const metrics: AixWire_Particles.CGSelectMetrics = { TOut: usage.output_tokens };
+  if (typeof usage.input_tokens === 'number')
+    metrics.TIn = usage.input_tokens;
+  if (usage.cache_read_input_tokens)
+    metrics.TCacheRead = usage.cache_read_input_tokens;
+  if (usage.cache_creation_input_tokens)
+    metrics.TCacheWrite = usage.cache_creation_input_tokens;
+  // reasoning tokens are a subset of output_tokens (already in TOut) - surfaced as a breakdown, like OpenAI/Gemini
+  if (typeof usage.output_tokens_details?.thinking_tokens === 'number')
+    metrics.TOutR = usage.output_tokens_details.thinking_tokens;
+  // per-call billed server tools
+  if (usage.server_tool_use?.web_search_requests)
+    metrics.nWebSearch = usage.server_tool_use.web_search_requests;
+  // served tier/geo (not on the delta)
+  const $xPrice = _antPriceMultiplier(usage);
+  if ($xPrice !== undefined)
+    metrics.$xPrice = $xPrice;
+  return metrics;
+}
+
+/** Served tags -> confirmed multiplier: batch 0.5x, US residency 1.1x. A served 'fast' is per-model priced and stays on the parameter side; 'standard' confirms plain rates. */
+function _antPriceMultiplier(usage: { service_tier?: string | null, inference_geo?: string | null, speed?: string | null }): number | undefined {
+  if (usage.speed === 'fast') return undefined;
+  const multiplier = (usage.service_tier === 'batch' ? 0.5 : 1) * (usage.inference_geo === 'us' ? 1.1 : 1);
+  if (multiplier === 1 && usage.speed !== 'standard') return undefined; // nothing confirmed
+  return Math.round(multiplier * 1000) / 1000;
+}
 
 function _fromAnthropicStopReason(stopReason: AnthropicWire_API_Message_Create.Response['stop_reason'], debugCaller: string) {
   switch (stopReason) {

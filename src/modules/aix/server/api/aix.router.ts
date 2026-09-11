@@ -23,7 +23,7 @@ import { AixWire_API, AixWire_API_ChatContentGenerate } from './aix.wiretypes';
  * request that genuinely crossed 270s.
  */
 function _armSlowRequestWatchdog(label: string, hardKillTime = 300): () => void {
-  const timer = setTimeout(() => console.error(`[AIX] SLOW request (almost ${hardKillTime}s): ${label}`), (hardKillTime - 15) * 1000);
+  const timer = setTimeout(() => console.log(`[AIX] SLOW request (almost ${hardKillTime}s): ${label}`), (hardKillTime - 15) * 1000);
   return () => clearTimeout(timer);
 }
 
@@ -47,7 +47,7 @@ export const aixRouter = createTRPCRouter({
       const _clearWatchdog = _armSlowRequestWatchdog(`model=${input.model.id} dialect=${input.access.dialect} context=${input.context.name}/${input.context.ref}`);
       try {
         const _d = _createDebugConfig(input.access, input.connectionOptions, input.context.name);
-        const dispatchCreator = () => createChatGenerateDispatch(input.access, input.model, input.chatGenerate, input.streaming, !!input.connectionOptions?.enableResumability);
+        const dispatchCreator = () => createChatGenerateDispatch(input.access, input.model, input.chatGenerate, input.streaming, input.context.ref, !!input.connectionOptions?.enableResumability);
 
         yield* executeChatGenerateWithContinuation(dispatchCreator, ctx.reqSignal, _d);
       } finally {

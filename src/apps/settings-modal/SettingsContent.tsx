@@ -10,9 +10,8 @@ import { optimaActions } from '~/common/layout/optima/useOptima';
 
 import { ASRxConfigureEngines } from '~/modules/asrx/components/ASRxConfigureEngines';
 import { BrowseSettings } from '~/modules/browse/BrowseSettings';
-import { DallESettings } from '~/modules/t2i/dalle/DallESettings';
 import { GoogleSearchSettings } from '~/modules/google/GoogleSearchSettings';
-import { T2ISettings } from '~/modules/t2i/T2ISettings';
+import { T2IConfigureEngines } from '~/modules/t2i/components/T2IConfigureEngines';
 
 import type { SettingsNavId } from './settings.nav';
 import { AppChatSettingsAI } from './AppChatSettingsAI';
@@ -195,21 +194,16 @@ function renderSection(nodeId: SettingsNavId, isMobile: boolean, onSelect: (id: 
     case 'voice-out':
       return <VoiceOutputBlock isMobile={isMobile} />;
 
-    // Draw: flat, provider picker then provider-specific (OpenAI) settings
-    case 'draw':
-      return <>
-        <Box sx={_styles.block}><T2ISettings /></Box>
-        <SectionHeader label='OpenAI' />
-        <Box sx={_styles.block}><DallESettings /></Box>
-      </>;
-
-    // Tools parent (hub): common search info, then links into Browsing / Custom Search
+    // Tools parent (hub): common search info, then links into Draw / Browsing / Custom Search
     case 'tools':
       return <>
         <ToolsSearchBanner />
         <ChildNav parentId='tools' onSelect={onSelect} />
         <ToolsDiagnostics />
       </>;
+    // Draw: engine Select doubles as active engine + configuration focus (ASRx-style)
+    case 'tools-draw':
+      return <Box sx={_styles.block}><T2IConfigureEngines isMobile={isMobile} /></Box>;
     case 'tools-browse':
       return <Box sx={_styles.block}><BrowseSettings /></Box>;
     case 'tools-search':

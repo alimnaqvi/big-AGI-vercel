@@ -1,6 +1,6 @@
 import type { LiveFileId } from '~/common/livefile/liveFile.types';
 import { agiId } from '~/common/util/idUtils';
-import { ellipsizeMiddle } from '~/common/util/textUtils';
+import { ellipsizeMiddle, humanReadableHyphenated } from '~/common/util/textUtils';
 
 
 /// Fragments - forward compatible ///
@@ -98,22 +98,28 @@ type _DMessageFragmentWrapper<TFragment, TPart extends { pt: string }> = {
  * - Lossy-safe: Can be dropped during conversion/export without breaking functionality.
  * - Graceful-degrade on missing.
  */
-export type DMessageFragmentVendorState = Record<string, unknown> & {
+export type DMessageFragmentVendorState = Record<string, unknown> & DMessageFragmentVendorStateKnown;
+export type DMessageFragmentVendorStateKnown = {
+  // Future: anthropic?: { ... }
   gemini?: {
     thoughtSignature?: string; // Gemini 3+ - echoed back to maintain reasoning context
   };
-  openai?: {
-    // Responses API reasoning item continuity handle.
-    // IMPORTANT: OpenAI-private encryption + server-side item id; never round-trip to xAI.
-    reasoningItem?: { id?: string; encryptedContent?: string; };
-  };
-  xai?: {
-    // xAI Responses API reasoning item continuity handle.
-    // IMPORTANT: xAI-private encryption + server-side item id; never round-trip to OpenAI.
-    reasoningItem?: { id?: string; encryptedContent?: string; };
-  };
-  // Future: anthropic?: { ... }
+  // Responses-API vendors (AixWire_Vendors.RSP_VENDORS in aix.wiretypes.ts): one namespace each, same shape. The handles are
+  // vendor-server-private (encryption keys + item ids): OpenAI's never go to xAI or Meta, and vice versa.
+  metaai?: _DMessageFragmentRspState;
+  openai?: _DMessageFragmentRspState;
+  sakanaai?: _DMessageFragmentRspState;
+  xai?: _DMessageFragmentRspState;
 }
+
+// Responses-API continuity state, one namespace per vendor (mirrors AixWire_Parts._vnd.<AixWire_Vendors.RspVendor>)
+type _DMessageFragmentRspState = {
+  // reasoning item continuity handle (rs_... id + encrypted_content), replayed on follow-up requests to the SAME vendor
+  reasoningItem?: { id?: string; encryptedContent?: string; };
+  // message phase on text fragments: 'commentary' (preamble/progress) vs 'final_answer'; replayed on follow-up requests
+  phase?: 'commentary' | 'final_answer';
+};
+
 
 
 /// Parts - STABLE ///
@@ -243,12 +249,38 @@ type DMessageToolEnvironment = 'upstream' | 'server' | 'client';
 type DMessageToolCodeExecutor = 'gemini_auto_inline' | 'code_interpreter';
 
 
-/** Hosted resource - a provider-hosted resource (e.g. Anthropic container file from Skills/code execution). */
+/**
+ * Hosted resource - any externally-resolvable resource referenced by handle: provider-hosted files
+ * (Anthropic Skills/code-exec, Gemini Files, OpenAI containers) and public URLs (user-added video).
+ *
+ * Invariants (keep these, they prevent data debt):
+ * - AUTHORSHIP IS POSITIONAL: who contributed the resource = the containing message's role, like every
+ *   other part. Never add an author/origin field - a fragment moved across roles re-means correctly.
+ * - `via` names the RESOLVING NAMESPACE (who can turn the handle into bytes), nothing else. Lifecycle is
+ *   structural where it matters (anthropic: containerId present = ephemeral container file, absent = Files API).
+ * - WIRE LAW: user-authored resources never drop silently (native lowering or honest text degradation);
+ *   assistant-authored ones may no-op on replay (their tool results already carry the knowledge).
+ * - Lowering dispatches on role x via; new capabilities (e.g. user Files-API uploads) are new lowering
+ *   cases, never new part shapes.
+ */
 export type DMessageHostedResourcePart = {
   pt: 'hosted_resource';
+  muted?: boolean;  // user state, not identity: keep in chat but lower as honest text (hostedResourceMutedText) instead of media - only settable on 'url' resources for now (the only user-authored via)
   resource:
     | { via: 'anthropic', fileId: string, containerId?: string }
-    | { via: 'openai-container', fileId: string, containerId: string, filename?: string }; // OpenAI code-interpreter container file
+    | { via: 'gemini-file', fileName: string, mimeType: string, isVideo?: boolean /* NOTE: more metadata incl expiration time can be fetched by fileName */ } // [Gemini] Files-API artifact (e.g. Omni video via delivery:uri) - re-fetchable for ~48h via the key-proxied Gemini download route
+    | { via: 'openai-container', fileId: string, containerId: string, filename?: string } // OpenAI code-interpreter container file
+    | {
+      // URL-referenced media on a public host (e.g. YouTube, direct .mp4) - the provider fetches it server-side; we never download it
+      via: 'url',
+      url: string,                                // canonical identity: normalized YouTube watch URL or direct https media URL
+      mediaKind: 'video',                         // future: 'audio'
+      mimeType?: string,                          // set for direct media URLs (e.g. 'video/mp4'); absent for YouTube
+      // FUTURE (no producer yet - enable with the trim/sampling UI; kept FLAT so plain {...spread} recreates the resource):
+      // clipStartSec?: number,                   // trim start -> Gemini videoMetadata.startOffset (verified: bills only the slice)
+      // clipEndSec?: number,                     // trim end -> Gemini videoMetadata.endOffset
+      // fps?: number,                            // sampling override -> Gemini videoMetadata.fps (default: 1)
+    };
 };
 
 
@@ -280,10 +312,12 @@ export type DVoidModelAuxPart = {
 export type DVoidPlaceholderPart = {
   pt: 'ph',
   pText: string,
+  pDetail?: string,        // extra detail for the render (e.g. tooltip)
 
   // render type
   pType?:
-    | 'chat-gen-follow-up',  // a follow-up is being generated
+    | 'chat-gen-follow-up'   // a follow-up is being generated
+    | 'notice',              // neutral dismissible notice (e.g. earlier reasoning dropped): survives generation, deleted by the user
 
   // operation history for stacked progress UI
   opLog?: readonly DVoidPlaceholderMOp[],
@@ -462,8 +496,13 @@ export function create_CodeExecutionResponse_ContentFragment(id: string, error: 
   return _createContentFragment(_create_CodeExecutionResponse_Part(id, error, result, executor, environment));
 }
 
-export function createHostedResourceContentFragment(resource: DMessageHostedResourcePart['resource']): DMessageContentFragment {
-  return _createContentFragment({ pt: 'hosted_resource', resource });
+export function createHostedResourceContentFragment(resource: DMessageHostedResourcePart['resource'], muted?: boolean): DMessageContentFragment {
+  return _createContentFragment({ pt: 'hosted_resource', ...(muted && { muted: true }), resource });
+}
+
+/** Wire form of a muted URL-referenced media part: the referent survives at ~a dozen tokens, the media isn't re-tokenized. */
+export function hostedResourceMutedText(resource: Extract<DMessageHostedResourcePart['resource'], { via: 'url' }>): string {
+  return `[${resource.mediaKind} omitted: ${resource.url}]`;
 }
 
 function _createContentFragment(part: DMessageContentFragment['part']): DMessageContentFragment {
@@ -497,6 +536,45 @@ function _createAttachmentFragment(title: string, caption: string, part: DMessag
 }
 
 
+/// Attachment Fragments - Naming
+//
+// Attachments carry two names with distinct jobs:
+// - HUMAN name: what buttons/panes display - resolve it with `attachmentFragmentDocTitle()` (doc parts: l1Title,
+//   then the fragment title, then source filename, then ref)
+// - LLM name: `part.ref` only - the AIX adapters serialize doc parts as a ```ref ... ``` fenced block,
+//   and neither l1Title nor title/caption are sent upstream
+// Writers keep the two aligned: creation derives fragment.title == part.l1Title (and a hyphenated ref)
+// from the source, and renames go through `attachmentFragmentDocRename()` which updates title, l1Title and ref
+// together. `caption` is provenance only ('Pasted', 'From Google Drive', ...), never a name.
+// Data at rest predating these rules already has title == l1Title, so reads need no migration.
+
+/**
+ * Canonical user-facing name of an attachment fragment - single source of truth for display.
+ */
+export function attachmentFragmentDocTitle(fragment: DMessageAttachmentFragment, fallback: string = 'Document'): string {
+  const docPart = isDocPart(fragment.part) ? fragment.part : undefined;
+  return docPart?.l1Title || fragment.title || docPart?.meta?.srcFileName || docPart?.ref || fallback;
+}
+
+/**
+ * Renames an attachment fragment - pure, preserves fId and all other fields.
+ * Doc parts get the full treatment: display title, embedded l1Title, and the LLM-facing ref
+ * (hyphenated form, which the model sees as the fence info string of the doc).
+ * Note: rename is metadata-only and does not bump the doc version (version tracks content edits).
+ */
+export function attachmentFragmentDocRename(fragment: DMessageAttachmentFragment, newName: string): DMessageAttachmentFragment {
+  const title = newName.replace(/\s+/g, ' ').trim(); // names are single-line
+  if (!title) return fragment;
+  if (!isDocPart(fragment.part))
+    return { ...fragment, title };
+  return {
+    ...fragment,
+    title,
+    part: { ...fragment.part, l1Title: title, ref: humanReadableHyphenated(title) },
+  };
+}
+
+
 /// Void Fragments - Creation & Duplication
 
 export function createAnnotationsVoidFragment(annotations: DVoidWebCitation[]): DMessageVoidFragment {
@@ -507,8 +585,8 @@ export function createModelAuxVoidFragment(aType: DVoidModelAuxPart['aType'], aT
   return _createVoidFragment(_create_ModelAux_Part(aType, aText, textSignature, redactedData));
 }
 
-export function createPlaceholderVoidFragment(placeholderText: string, placeholderType?: DVoidPlaceholderPart['pType'], aixControl?: DVoidPlaceholderPart['aixControl'], opLog?: readonly DVoidPlaceholderMOp[]): DMessageVoidFragment {
-  return _createVoidFragment(_create_Placeholder_Part(placeholderText, placeholderType, aixControl, opLog));
+export function createPlaceholderVoidFragment(placeholderText: string, placeholderType?: DVoidPlaceholderPart['pType'], aixControl?: DVoidPlaceholderPart['aixControl'], opLog?: readonly DVoidPlaceholderMOp[], pDetail?: string): DMessageVoidFragment {
+  return _createVoidFragment(_create_Placeholder_Part(placeholderText, placeholderType, aixControl, opLog, pDetail));
 }
 
 function _createVoidFragment(part: DMessageVoidFragment['part']): DMessageVoidFragment {
@@ -639,8 +717,8 @@ function _create_ModelAux_Part(aType: DVoidModelAuxPart['aType'], aText: string,
   };
 }
 
-function _create_Placeholder_Part(placeholderText: string, pType?: DVoidPlaceholderPart['pType'], aixControl?: DVoidPlaceholderPart['aixControl'], opLog?: readonly DVoidPlaceholderMOp[]): DVoidPlaceholderPart {
-  return { pt: 'ph', pText: placeholderText, ...(pType ? { pType } : undefined), ...(opLog ? { opLog: opLog.map(e => ({ ...e })) } : undefined), ...(aixControl ? { aixControl: { ...aixControl } } : undefined) };
+function _create_Placeholder_Part(placeholderText: string, pType?: DVoidPlaceholderPart['pType'], aixControl?: DVoidPlaceholderPart['aixControl'], opLog?: readonly DVoidPlaceholderMOp[], pDetail?: string): DVoidPlaceholderPart {
+  return { pt: 'ph', pText: placeholderText, ...(pDetail ? { pDetail } : undefined), ...(pType ? { pType } : undefined), ...(opLog ? { opLog: opLog.map(e => ({ ...e })) } : undefined), ...(aixControl ? { aixControl: { ...aixControl } } : undefined) };
 }
 
 function _create_Sentinel_Part(): _SentinelPart {
@@ -695,7 +773,7 @@ function _duplicate_Part<TPart extends (DMessageContentFragment | DMessageAttach
       return _create_ModelAux_Part(part.aType, part.aText, part.textSignature, part.redactedData) as TPart;
 
     case 'ph':
-      return _create_Placeholder_Part(part.pText, part.pType, part.aixControl, part.opLog) as TPart;
+      return _create_Placeholder_Part(part.pText, part.pType, part.aixControl, part.opLog, part.pDetail) as TPart;
 
     case 'text':
       return _create_Text_Part(part.text) as TPart;
@@ -711,7 +789,7 @@ function _duplicate_Part<TPart extends (DMessageContentFragment | DMessageAttach
         : _create_CodeExecutionResponse_Part(part.id, part.error, part.response.result, part.response.executor, part.environment) as TPart;
 
     case 'hosted_resource':
-      return { pt: 'hosted_resource', resource: { ...part.resource } } as TPart;
+      return { pt: 'hosted_resource', ...(part.muted && { muted: true }), resource: { ...part.resource } } as TPart;
 
     case '_pt_sentinel':
       return _create_Sentinel_Part() as TPart;
