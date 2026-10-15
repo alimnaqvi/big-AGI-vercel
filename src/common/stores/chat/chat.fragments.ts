@@ -58,11 +58,12 @@ export type DMessageAttachmentFragment = _DMessageFragmentWrapper<'attachment',
 };
 
 /**
- * Void Fragments: no meaning, pure cosmetic, not stored, not processed
+ * Void Fragments: reasoning, annotations and UI placeholders outside ordinary content.
+ * Reasoning is stored and can be replayed to providers; transient placeholders are removed on completion.
  */
 export type DMessageVoidFragment = _DMessageFragmentWrapper<'void',
   | DVoidModelAnnotationsPart     // (non submitted) model references, citations, etc.
-  | DVoidModelAuxPart             // (non submitted) model auxiliary information, from the model itself
+  | DVoidModelAuxPart             // model reasoning and continuity data; replay depends on the provider
   | DVoidPlaceholderPart          // (non submitted) placeholder to be replaced by another part
   | _SentinelPart
 >;
@@ -318,6 +319,8 @@ export type DVoidPlaceholderPart = {
   pType?:
     | 'chat-gen-follow-up'   // a follow-up is being generated
     | 'notice',              // neutral dismissible notice (e.g. earlier reasoning dropped): survives generation, deleted by the user
+  pNoticeKind?: 'input-transform' | 'hres-discarded' | 'flow-cont', // for 'notice': the AIX notice type it came from, for per-kind UI policy (e.g. input-transform yields to errors, flow-cont renders as a divider)
+  pNoticeLevel?: 'warn', // for 'notice': the sender judged it unexpected (e.g. a reasoning reset inside a paused turn); absent = informational
 
   // operation history for stacked progress UI
   opLog?: readonly DVoidPlaceholderMOp[],
@@ -585,8 +588,8 @@ export function createModelAuxVoidFragment(aType: DVoidModelAuxPart['aType'], aT
   return _createVoidFragment(_create_ModelAux_Part(aType, aText, textSignature, redactedData));
 }
 
-export function createPlaceholderVoidFragment(placeholderText: string, placeholderType?: DVoidPlaceholderPart['pType'], aixControl?: DVoidPlaceholderPart['aixControl'], opLog?: readonly DVoidPlaceholderMOp[], pDetail?: string): DMessageVoidFragment {
-  return _createVoidFragment(_create_Placeholder_Part(placeholderText, placeholderType, aixControl, opLog, pDetail));
+export function createPlaceholderVoidFragment(placeholderText: string, placeholderType?: DVoidPlaceholderPart['pType'], aixControl?: DVoidPlaceholderPart['aixControl'], opLog?: readonly DVoidPlaceholderMOp[], pDetail?: string, pNoticeKind?: DVoidPlaceholderPart['pNoticeKind'], pNoticeLevel?: DVoidPlaceholderPart['pNoticeLevel']): DMessageVoidFragment {
+  return _createVoidFragment(_create_Placeholder_Part(placeholderText, placeholderType, aixControl, opLog, pDetail, pNoticeKind, pNoticeLevel));
 }
 
 function _createVoidFragment(part: DMessageVoidFragment['part']): DMessageVoidFragment {
@@ -717,8 +720,8 @@ function _create_ModelAux_Part(aType: DVoidModelAuxPart['aType'], aText: string,
   };
 }
 
-function _create_Placeholder_Part(placeholderText: string, pType?: DVoidPlaceholderPart['pType'], aixControl?: DVoidPlaceholderPart['aixControl'], opLog?: readonly DVoidPlaceholderMOp[], pDetail?: string): DVoidPlaceholderPart {
-  return { pt: 'ph', pText: placeholderText, ...(pDetail ? { pDetail } : undefined), ...(pType ? { pType } : undefined), ...(opLog ? { opLog: opLog.map(e => ({ ...e })) } : undefined), ...(aixControl ? { aixControl: { ...aixControl } } : undefined) };
+function _create_Placeholder_Part(placeholderText: string, pType?: DVoidPlaceholderPart['pType'], aixControl?: DVoidPlaceholderPart['aixControl'], opLog?: readonly DVoidPlaceholderMOp[], pDetail?: string, pNoticeKind?: DVoidPlaceholderPart['pNoticeKind'], pNoticeLevel?: DVoidPlaceholderPart['pNoticeLevel']): DVoidPlaceholderPart {
+  return { pt: 'ph', pText: placeholderText, ...(pDetail ? { pDetail } : undefined), ...(pType ? { pType } : undefined), ...(pNoticeKind ? { pNoticeKind } : undefined), ...(pNoticeLevel ? { pNoticeLevel } : undefined), ...(opLog ? { opLog: opLog.map(e => ({ ...e })) } : undefined), ...(aixControl ? { aixControl: { ...aixControl } } : undefined) };
 }
 
 function _create_Sentinel_Part(): _SentinelPart {
@@ -773,7 +776,7 @@ function _duplicate_Part<TPart extends (DMessageContentFragment | DMessageAttach
       return _create_ModelAux_Part(part.aType, part.aText, part.textSignature, part.redactedData) as TPart;
 
     case 'ph':
-      return _create_Placeholder_Part(part.pText, part.pType, part.aixControl, part.opLog, part.pDetail) as TPart;
+      return _create_Placeholder_Part(part.pText, part.pType, part.aixControl, part.opLog, part.pDetail, part.pNoticeKind, part.pNoticeLevel) as TPart;
 
     case 'text':
       return _create_Text_Part(part.text) as TPart;

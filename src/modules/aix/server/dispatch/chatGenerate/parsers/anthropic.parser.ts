@@ -1,7 +1,7 @@
 import { safeErrorString } from '~/server/wire';
 
-import type { AixWire_Particles } from '../../../api/aix.wiretypes';
-import type { ChatGenerateParseFunction } from '../chatGenerate.dispatch';
+import type { AixAPIChatGenerate_Request, AixWire_Particles } from '../../../api/aix.wiretypes';
+import type { ChatGenerateParseContext, ChatGenerateParseFunction } from '../chatGenerate.dispatch';
 import type { IParticleTransmitter } from './IParticleTransmitter';
 import { IssueSymbols } from '../ChatGenerateTransmitter';
 import { aixResilientUnknownValue } from '../../../api/aix.resilience';
@@ -83,13 +83,14 @@ const hotFixAntInjectToolsTextSpacer = true;
 // here) - noted in this file as the spot we track Anthropic protocol deltas pending wider model support past Opus 4.8.
 // See: https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
 
-export function createAnthropicMessageParser(): ChatGenerateParseFunction {
+export function createAnthropicMessageParser(thinkingOrigins?: () => AnthropicThinkingOrigins): ChatGenerateParseFunction {
   const parserCreationTimestamp = Date.now();
   let responseMessage: AnthropicWire_API_Message_Create.Response;
   let hasErrored = false;
   let timeToFirstEvent: number;
   let messageStartTime: number | undefined = undefined;
   let chatInTokens: number | undefined = undefined;
+  let lastUsage: Parameters<typeof _fromAnthropicUsage>[0] | undefined = undefined; // the request's final usage, for the pause divider
   let needsTextSeparator = false; // insert text separator when text follows server tool
 
   let elideFirstTextBlock = hotFixAntElideLeadingDoubleNewline;
@@ -101,7 +102,7 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
     return true;
   };
 
-  return function(pt: IParticleTransmitter, eventData: string, eventName?: string, context?: { retriesAvailable: boolean }): void {
+  return function(pt: IParticleTransmitter, eventData: string, eventName?: string, context?: ChatGenerateParseContext): void {
 
     // Time to first event
     if (timeToFirstEvent === undefined)
@@ -147,7 +148,7 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
 
         // -> [2026-09-01] Preserved thinking: replayed thinking blocks the API dropped (edited history, or a model switch)
         if (responseMessage.input_transformations?.length)
-          _sendInputTransforms(pt, responseMessage.input_transformations);
+          _sendInputTransforms(pt, responseMessage.input_transformations, thinkingOrigins);
 
         if (responseMessage.usage) {
           chatInTokens = responseMessage.usage.input_tokens;
@@ -162,7 +163,15 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
         if (!responseMessage)
           throw new Error('Unexpected content_block_start');
 
-        const { index: requestedIndex, content_block: contentBlock } = AnthropicWire_API_Message_Create.event_ContentBlockStart_schema.parse(JSON.parse(eventData));
+        const rawEvent = JSON.parse(eventData);
+        const { index: requestedIndex, content_block: contentBlock } = AnthropicWire_API_Message_Create.event_ContentBlockStart_schema.parse(rawEvent);
+
+        // Echo fidelity: the parse strips fields the schema doesn't declare, but this block is echoed verbatim on a
+        // pause_turn continuation, where preserved thinking binds every later thinking block to the turn's content
+        // as generated - restore the raw fields so the echo is the server's block (deltas still accumulate below).
+        // The stripped fields are also reported (throws in dev, warns in prod) so schema drift is seen, not hidden.
+        _reportStrippedBlockFields(rawEvent.content_block, contentBlock);
+        Object.assign(contentBlock, rawEvent.content_block);
 
         // [Anthropic, 2026-01-12] Block Start Index issue
         let index = requestedIndex;
@@ -361,6 +370,11 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
             // Citations arrive incrementally during streaming - add to current text block
             if (contentBlock.type === 'text') {
               const citation = delta.citation;
+              // Keep the citation on the accumulated block: a pause_turn continuation echoes this block, and the
+              // preserved-thinking check binds every later thinking block to the turn's content as generated -
+              // a cited text block replayed without its citations reads as an edit and drops all thinking after it
+              // (verified 2026-09-23: 'prefix_binding_mismatch' on the next thinking block; clean with citations kept)
+              (contentBlock.citations ??= []).push(citation);
               if (citation.type === 'web_search_result_location') {
                 // Web search citation from server-side search
                 pt.appendUrlCitation(
@@ -424,6 +438,8 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
         const { delta, usage } = AnthropicWire_API_Message_Create.event_MessageDelta_schema.parse(JSON.parse(eventData));
 
         Object.assign(responseMessage, delta);
+        if (usage)
+          lastUsage = usage;
 
         // -> Container state update - arrives here when container was created mid-stream
         if (delta.container)
@@ -449,6 +465,9 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
             const chatOutRate = elapsedTimeSeconds > 0 ? usage.output_tokens / elapsedTimeSeconds : 0;
             // the delta carries the final input side (server tool results land here, not in message_start)
             Object.assign(metricsUpdate, _fromAnthropicUsage(usage));
+            const nCodeExec = _countCodeExecutions(responseMessage.content);
+            if (nCodeExec)
+              metricsUpdate.nCodeExec = nCodeExec;
             if (metricsUpdate.TIn === undefined)
               metricsUpdate.TIn = chatInTokens ?? -1;
             metricsUpdate.vTOutInner = Math.round(chatOutRate * 100) / 100; // Round to 2 decimal places
@@ -468,7 +487,7 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
         // Continuation: when pause_turn, throw to trigger re-dispatch with accumulated content
         if (responseMessage.stop_reason === 'pause_turn')
           throw new DispatchContinuationSignal(
-            _createAnthropicPauseTurnContinuation(responseMessage.content, responseMessage.container?.id),
+            _createAnthropicPauseTurnContinuation(responseMessage.content, responseMessage.container?.id, lastUsage),
           );
 
         return pt.setDialectEnded('done-dialect'); // Anthropic: stop message
@@ -492,18 +511,18 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
         // 500* - api_error (anthropic systems internal unexpected error)
         // 529* - overloaded_error: The API is temporarily overloaded.
         // *: retryable errors
-        const isRetryableError = ['overloaded_error', 'rate_limit_error', 'api_error'].includes(error.type);
+        // map error types to HTTP status codes: selects the retry class (429/529 capacity, 500 transient) and shows in diagnostics
+        const errorTypeToHttpStatus: Record<string, number> = {
+          'rate_limit_error': 429,
+          'api_error': 500,
+          'overloaded_error': 529,
+        };
+        const isRetryableError = error.type in errorTypeToHttpStatus;
 
-        // Throw retryable error to instruct the correct ancestor to restart (only if retries available
+        // Throw retryable error to instruct the correct ancestor to restart (only if retries available for this class)
         if (isRetryableError) {
-          if (context?.retriesAvailable) {
+          if (context?.hasRetriesForHttpStatus(errorTypeToHttpStatus[error.type])) {
             console.log(`[Aix.Anthropic] Can retry error '${errorText}'`);
-            // map error types to HTTP status codes for diagnostics
-            const errorTypeToHttpStatus: Record<string, number> = {
-              'rate_limit_error': 429,
-              'api_error': 500,
-              'overloaded_error': 529,
-            };
             // request a retry by unwinding to the retrier
             throw new OperationRetrySignal(`Anthropic: ${errorText}`, {
               causeHttp: errorTypeToHttpStatus[error.type],
@@ -525,7 +544,7 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
 }
 
 
-export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
+export function createAnthropicMessageParserNS(thinkingOrigins?: () => AnthropicThinkingOrigins): ChatGenerateParseFunction {
   const parserCreationTimestamp = Date.now();
   let needsTextSeparator = false; // insert text separator when text follows server tool
 
@@ -538,9 +557,10 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
     return true;
   };
 
-  return function(pt: IParticleTransmitter, fullData: string /*, eventName?: string, context?: { retriesAvailable: boolean } */): void {
+  return function(pt: IParticleTransmitter, fullData: string /*, eventName?: string, context?: ChatGenerateParseContext */): void {
 
     // parse with validation (e.g. type: 'message' && role: 'assistant')
+    const rawResponse = JSON.parse(fullData);
     const {
       model,
       content,
@@ -549,7 +569,13 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
       stop_details,
       usage,
       input_transformations,
-    } = AnthropicWire_API_Message_Create.Response_schema.parse(JSON.parse(fullData));
+    } = AnthropicWire_API_Message_Create.Response_schema.parse(rawResponse);
+
+    // Echo fidelity (see the streaming parser): the blocks are echoed verbatim on a pause_turn continuation
+    content.forEach((block, i) => {
+      _reportStrippedBlockFields(rawResponse.content[i], block);
+      Object.assign(block, rawResponse.content[i]);
+    });
 
     // -> Model
     if (model)
@@ -561,7 +587,7 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
 
     // -> [2026-09-01] Preserved thinking: dropped replayed thinking blocks
     if (input_transformations?.length)
-      _sendInputTransforms(pt, input_transformations);
+      _sendInputTransforms(pt, input_transformations, thinkingOrigins);
 
     // -> Content Blocks - Non-Streaming
     for (let i = 0; i < content.length; i++) {
@@ -671,8 +697,10 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
     }
 
     // -> Stats: timing always (measured locally); token/cache fields only when the usage block is present (#1149)
+    const nCodeExec = _countCodeExecutions(content);
     pt.updateMetrics({
       ...(usage ? _fromAnthropicUsage(usage) : {}),
+      ...(nCodeExec ? { nCodeExec } : {}),
       // vTOutInner: // we don't know the server-side rate
       // dtStart / dtInner: // we don't know
       dtAll: Date.now() - parserCreationTimestamp,
@@ -681,7 +709,7 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
     // Continuation: when pause_turn, throw to trigger re-dispatch with accumulated content
     if (stop_reason === 'pause_turn')
       throw new DispatchContinuationSignal(
-        _createAnthropicPauseTurnContinuation(content, container?.id),
+        _createAnthropicPauseTurnContinuation(content, container?.id, usage ?? undefined),
       );
 
     // -> Token Stop Reason (pause_turn already thrown above)
@@ -725,18 +753,159 @@ function _emitContainerState(pt: IParticleTransmitter, container: { id: string; 
   });
 }
 
-/** [2026-09-01] Preserved thinking: relay the replayed thinking blocks the API dropped, one particle per vendor reason (normalized to an AIX cause). */
-function _sendInputTransforms(pt: IParticleTransmitter, transforms: NonNullable<AnthropicWire_API_Message_Create.Response['input_transformations']>): void {
+/**
+ * Schema drift detector: fields the response carried (non-null) that the wire schema stripped. The echo restores
+ * them regardless; this makes the drift visible through the resilience channel (throws in dev, warns in prod).
+ */
+function _reportStrippedBlockFields(rawBlock: unknown, parsedBlock: { type: string, name?: string }): void {
+  const stripped = _collectStrippedPaths(rawBlock, parsedBlock, '', []);
+  if (stripped.length)
+    aixResilientUnknownValue('Anthropic', 'contentBlockFields', { type: parsedBlock.type, ...(parsedBlock.name ? { name: parsedBlock.name } : {}), stripped });
+}
+
+function _collectStrippedPaths(raw: unknown, parsed: unknown, path: string, out: string[]): string[] {
+  if (Array.isArray(raw)) {
+    if (Array.isArray(parsed))
+      raw.forEach((item, i) => _collectStrippedPaths(item, parsed[i], `${path}[${i}]`, out));
+    return out;
+  }
+  if (raw && typeof raw === 'object') {
+    const parsedObject: Record<string, unknown> = (parsed && typeof parsed === 'object') ? parsed as Record<string, unknown> : {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (value === null || value === undefined) continue; // a stripped null carries nothing (verified: not an edit for the API either)
+      const keyPath = path ? `${path}.${key}` : key;
+      if (!(key in parsedObject))
+        out.push(keyPath);
+      else
+        _collectStrippedPaths(value, parsedObject[key], keyPath, out);
+    }
+  }
+  return out;
+}
+
+/**
+ * Where each replayed thinking block of the request came from, in wire order: wire path ('messages.1.content.0') -> the 1-based
+ * reply (model message of the chat sequence) it replays, matched by signature, and that reply's opening text. Wire positions alone
+ * don't point at chat messages: a tool loop spans many wire messages, and replies with no user message between them merge into one.
+ */
+export type AnthropicThinkingOrigins = Map<string, { reply: number, opening: string }>;
+
+export function anthropicThinkingOrigins(chatSequence: AixAPIChatGenerate_Request['chatSequence'], wireMessages: AnthropicWire_API_Message_Create.Request['messages']): AnthropicThinkingOrigins {
+  const replyByHandle = new Map<string, number>();
+  const openings: string[] = [];
+  let reply = 0;
+  for (const message of chatSequence) {
+    if (message.role !== 'model') continue;
+    reply++;
+    for (const part of message.parts) {
+      if (part.pt === 'text')
+        openings[reply] ??= part.text;
+      else if (part.pt === 'ma') {
+        if (part.textSignature) replyByHandle.set(part.textSignature, reply);
+        for (const data of part.redactedData ?? []) replyByHandle.set(data, reply);
+      }
+    }
+  }
+  const origins: AnthropicThinkingOrigins = new Map();
+  wireMessages.forEach((message, m) => message.content.forEach((block, b) => {
+    const handle = block.type === 'thinking' ? block.signature : block.type === 'redacted_thinking' ? block.data : undefined;
+    const reply = handle ? replyByHandle.get(handle) : undefined;
+    if (reply) origins.set(`messages.${m}.content.${b}`, { reply, opening: openings[reply] ?? '' });
+  }));
+  return origins;
+}
+
+/** [2026-09-01] Preserved thinking: relay the replayed thinking blocks the API dropped, as one void notice per vendor reason (normalized to an AIX cause). */
+function _sendInputTransforms(pt: IParticleTransmitter, transforms: NonNullable<AnthropicWire_API_Message_Create.Response['input_transformations']>, thinkingOrigins: (() => AnthropicThinkingOrigins) | undefined): void {
   const pathsByReason = new Map<string, string[]>();
   for (const { type, path, reason } of transforms) {
+    // 'thinking_mismatch_allowed' (observed 2026-09-24): the block failed the binding check but was kept, because the
+    // request set no block_binding (thinking left to the model's default) - informational, nothing was dropped
+    if (type === 'thinking_mismatch_allowed')
+      continue;
     if (type !== 'thinking_dropped') {
       aixResilientUnknownValue('Anthropic', 'inputTransformationType', type);
       continue;
     }
     pathsByReason.set(reason, [...(pathsByReason.get(reason) ?? []), path]);
   }
-  for (const [reason, paths] of pathsByReason)
-    pt.sendCGControl({ cg: 'input-transform', itt: 'thinking-dropped', cause: reason === 'prefix_binding_mismatch' ? 'history-edited' : reason === 'model_binding_mismatch' ? 'model-switch' : reason, reason, paths });
+  const origins = pathsByReason.size ? thinkingOrigins?.() : undefined;
+  for (const [reason, paths] of pathsByReason) {
+    // NOTE: Anthropic's 'prefix_binding_mismatch' fires identically for an edited/deleted message, a changed
+    // tool selection, or a changed system prompt (e.g. our own {{LocaleNow}} ticking to a new hour) - it does
+    // NOT tell us which. Empirically verified live (2026-09-21): a pure tool toggle and a pure system-prompt
+    // change both return this exact reason with zero message edits. Don't claim "History edited" here, it's
+    // provably wrong in those cases - stay cause-neutral instead.
+    const cause = reason === 'prefix_binding_mismatch' ? 'prefix-changed' : reason === 'model_binding_mismatch' ? 'model-switch' : reason;
+    const why = cause === 'prefix-changed' ? 'Reasoning reset' : cause === 'model-switch' ? 'Model changed' : cause;
+    const replies = origins && _describeDroppedReplies(paths, origins, cause === 'prefix-changed');
+    const what = replies?.what ?? (paths.length > 1 ? `ignored ${paths.length} reasoning blocks` : 'ignored 1 reasoning block');
+    const where = paths.map(p => p.replace(/^messages\.(\d+)\.content\.(\d+).*$/, '$1.$2')).join(', '); // wire positions: message.block
+    const harmless = cause !== 'prefix-changed' ? '**Harmless**: the model rethinks from the messages as they are now.'
+      : replies ? '**Harmless**: reasoning is reused only while everything before it is unchanged, otherwise the model reasons again.'
+        : '**Harmless**: the model reasoned again instead of reusing earlier reasoning. This happens when a message, the tool selection, or the instructions changed since that reasoning was generated.';
+    pt.appendVoidNotice({
+      p: 'vnt', nt: 'input-transform', itt: 'thinking-dropped', cause, reason, paths,
+      text: `${why}: ${what}`,
+      detail: [...replies?.paragraphs ?? [], harmless, `Ignored indices: \`${where}\` (zero-based)`].join('\n\n'), // indices last: the continuation's warning keeps only the last line
+    });
+  }
+}
+
+/**
+ * Names the replies whose reasoning was dropped. For prefix changes it also brackets the earliest change: a block is dropped when
+ * anything before it differs from when it was generated, so the difference lies before the first dropped block and after the
+ * kept block just before it (measured: system, tool set and tool-result edits drop every later block; moved cache_control, a
+ * changed effort and omitted earlier thinking drop none; a deleted user message drops only the blocks after it).
+ */
+function _describeDroppedReplies(paths: string[], origins: AnthropicThinkingOrigins, bracketChange: boolean): { what: string, paragraphs: string[] } | undefined {
+  if (!paths.every(p => origins.has(p))) return undefined; // e.g. a block of a paused turn sent back by the continuation: plain notice
+  const dropped = new Set(paths);
+  const perReply = new Map<number, { opening: string, dropped: number, total: number }>();
+  for (const [path, { reply, opening }] of origins) {
+    const r = perReply.get(reply) ?? { opening, dropped: 0, total: 0 };
+    r.total++;
+    if (dropped.has(path)) r.dropped++;
+    perReply.set(reply, r);
+  }
+  const droppedReplies = [...perReply].filter(([, r]) => r.dropped);
+  const keptReplies = [...perReply].filter(([, r]) => !r.dropped).map(([reply]) => reply); // partly kept replies show their counts in the list
+
+  // the detail is the notice markdown subset (see RenderNoticeDetail): '- ' bullets, **label**, *excerpt*, `code`
+  const list = ['**Ignored reasoning**'];
+  for (const [reply, { opening, dropped, total }] of droppedReplies.slice(0, 8)) {
+    const excerpt = opening.replace(/[#*`>]+/g, '').replace(/\s+/g, ' ').trim();
+    list.push(`- **Reply ${reply}** (${dropped} of ${total} block${total > 1 ? 's' : ''})${!excerpt ? '' : ` *${excerpt.length > 48 ? `${excerpt.slice(0, 48).trimEnd()}…` : excerpt}*`}`);
+  }
+  if (droppedReplies.length > 8)
+    list.push(`- **Replies ${_numberRanges(droppedReplies.slice(8).map(([reply]) => reply))}**`);
+  if (keptReplies.length)
+    list.push(`**Kept**: repl${keptReplies.length > 1 ? 'ies' : 'y'} ${_numberRanges(keptReplies)}`);
+  const paragraphs = [list.join('\n')];
+
+  if (bracketChange) {
+    const order = [...origins.keys()];
+    const firstIndex = order.findIndex(p => dropped.has(p));
+    const firstReply = origins.get(order[firstIndex])?.reply;
+    const keptReply = firstIndex > 0 ? origins.get(order[firstIndex - 1])?.reply : undefined;
+    paragraphs.push(keptReply === undefined ? `**Changed**: something before reply ${firstReply}'s first reasoning - the instructions (e.g. a date or time in them), the tools, or an earlier message.`
+      : keptReply === firstReply ? `**Changed**: something inside reply ${firstReply}, after its kept reasoning (e.g. a tool result that changed or was not sent back).`
+        : `**Changed**: something between reply ${keptReply} and reply ${firstReply} (e.g. an edited or deleted message).`);
+  }
+
+  return { what: `${droppedReplies.length} earlier repl${droppedReplies.length > 1 ? 'ies' : 'y'}`, paragraphs };
+}
+
+/** [1, 2, 3, 5, 7, 8] -> '1-3, 5, 7-8' */
+function _numberRanges(sorted: number[]): string {
+  const ranges: string[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++;
+    ranges.push(j > i ? `${sorted[i]}-${sorted[j]}` : `${sorted[i]}`);
+    i = j;
+  }
+  return ranges.join(', ');
 }
 
 /** Compose a human-readable error string from Anthropic's stop_details. Returns undefined when nothing useful to surface. */
@@ -1088,9 +1257,15 @@ function _handleCBS_ToolSearchToolResult(pt: IParticleTransmitter, block: Extrac
 function _createAnthropicPauseTurnContinuation(
   accumulatedContent: AnthropicWire_API_Message_Create.Response['content'],
   containerId: string | undefined,
-): { reason: string; mutateBody: (body: Record<string, unknown>) => Record<string, unknown> } {
+  usage: Parameters<typeof _fromAnthropicUsage>[0] | undefined,
+): DispatchContinuationSignal['continuation'] {
   return {
     reason: 'pause_turn',
+    notice: {
+      kind: 'vnd.ant.pause_turn',
+      text: 'Anthropic `pause_turn`',
+      detail: _describePausedTurn(accumulatedContent, usage),
+    },
     mutateBody(body: Record<string, unknown>): Record<string, unknown> {
       const messages = [...(body.messages as { role: string; content: unknown }[])];
 
@@ -1131,6 +1306,29 @@ function _createAnthropicPauseTurnContinuation(
 }
 
 
+/** The pause divider's detail: what the paused request did (hosted calls by tool, direct vs from code), its size, and its own token usage. */
+function _describePausedTurn(content: AnthropicWire_API_Message_Create.Response['content'], usage: Parameters<typeof _fromAnthropicUsage>[0] | undefined): string {
+  const calls = new Map<string, { direct: number, nested: number }>();
+  let reasoning = 0;
+  for (const block of content) {
+    if (!block || !AnthropicWire_Messages.isKnownContentBlockOutput(block)) continue; // sparse slot, or a future block type
+    if (block.type === 'thinking' || block.type === 'redacted_thinking')
+      reasoning++;
+    else if (block.type === 'server_tool_use') {
+      const count = calls.get(block.name) ?? { direct: 0, nested: 0 };
+      if (block.caller && block.caller.type !== 'direct') count.nested++;
+      else count.direct++;
+      calls.set(block.name, count);
+    }
+  }
+  const n = (v: number | null | undefined) => (v ?? 0).toLocaleString('en-US');
+  const total = [...calls.values()].reduce((acc, c) => acc + c.direct + c.nested, 0);
+  const byTool = [...calls].map(([name, c]) => `${name} ${c.direct + c.nested}${c.nested ? ` (${c.nested} from code)` : ''}`).join(', ');
+  return `Anthropic paused its hosted-tool loop after ${total} tool call${total === 1 ? '' : 's'} in this request${byTool ? ` (${byTool})` : ''}: ${content.length} blocks, ${reasoning} reasoning.`
+    + `\nThe partial turn was sent back unchanged and the model continued in a new request.`
+    + (usage ? `\nTokens this request: ${n(usage.input_tokens)} in, ${n(usage.cache_read_input_tokens)} cached, ${n(usage.output_tokens)} out.` : '');
+}
+
 /** Usage -> counts, tool calls, served tier. One mapper for message_start, message_delta (final) and the non-streaming response. input_tokens excludes the cache classes. */
 function _fromAnthropicUsage(usage: {
   input_tokens?: number | null,
@@ -1138,7 +1336,7 @@ function _fromAnthropicUsage(usage: {
   output_tokens_details?: { thinking_tokens: number } | null,
   cache_read_input_tokens?: number | null,
   cache_creation_input_tokens?: number | null,
-  server_tool_use?: { web_search_requests?: number } | null,
+  server_tool_use?: { web_search_requests?: number, web_fetch_requests?: number } | null,
   service_tier?: string | null,
   inference_geo?: string | null,
   speed?: string | null,
@@ -1156,11 +1354,24 @@ function _fromAnthropicUsage(usage: {
   // per-call billed server tools
   if (usage.server_tool_use?.web_search_requests)
     metrics.nWebSearch = usage.server_tool_use.web_search_requests;
+  if (usage.server_tool_use?.web_fetch_requests)
+    metrics.nWebFetch = usage.server_tool_use.web_fetch_requests;
   // served tier/geo (not on the delta)
   const $xPrice = _antPriceMultiplier(usage);
   if ($xPrice !== undefined)
     metrics.$xPrice = $xPrice;
   return metrics;
+}
+
+/** The code_execution container and its sub-tools: one kind of call, billed by container time, so usage carries no count and we count the blocks. */
+const _CODE_EXEC_TOOL_NAMES = new Set(['code_execution', 'bash_code_execution', 'text_editor_code_execution']);
+
+function _countCodeExecutions(content: AnthropicWire_API_Message_Create.Response['content']): number {
+  let n = 0;
+  for (const block of content)
+    if (block && AnthropicWire_Messages.isKnownContentBlockOutput(block) && block.type === 'server_tool_use' && _CODE_EXEC_TOOL_NAMES.has(block.name))
+      n++;
+  return n;
 }
 
 /** Served tags -> confirmed multiplier: batch 0.5x, US residency 1.1x. A served 'fast' is per-model priced and stays on the parameter side; 'standard' confirms plain rates. */

@@ -2,7 +2,7 @@ import * as z from 'zod/v4';
 import { TRPCError } from '@trpc/server';
 
 import { createTRPCRouter, edgeProcedure } from '~/server/trpc/trpc.server';
-import { fetchJsonOrTRPCThrow, fetchResponseOrTRPCThrow, TRPCFetcherError } from '~/server/trpc/trpc.router.fetchers';
+import { fetchJsonOrTRPCThrow, fetchResponseOrTRPCThrow, fetchTextOrTRPCThrow, TRPCFetcherError } from '~/server/trpc/trpc.router.fetchers';
 import { serverCapitalizeFirstLetter } from '~/server/wire';
 
 import { convert_Base64_To_UInt8Array, convert_UInt8Array_To_Base64 } from '~/common/util/blobUtils';
@@ -18,7 +18,7 @@ import { WireOpenRouterCreateImagesRequest, wireOpenRouterCreateImagesResponseSc
 import { ListModelsResponse_schema, ModelDescriptionSchema } from '../llm.server.types';
 import { listModelsRunDispatch } from '../listModels.dispatch';
 
-import { openAIAccess, OpenAIAccessSchema, openAIAccessSchema, OPENAI_API_PATHS, OPENROUTER_API_PATHS } from './openai.access';
+import { OPENAI_API_PATHS, openAIAccess, openAIAccessSchema, OpenAIAccessSchema, OPENROUTER_API_PATHS } from './openai.access';
 
 
 // Router Input/Output Schemas
@@ -163,6 +163,26 @@ export const llmOpenAIRouter = createTRPCRouter({
         base64Data: convert_UInt8Array_To_Base64(new Uint8Array(arrayBuffer), 'llms.openai.fileDownload'),
         mimeType: response.headers.get('content-type') || 'application/octet-stream',
       };
+    }),
+
+  /* [OpenAI] Containers API - delete a container file (the container itself expires on its own) */
+  containerFileDelete: edgeProcedure
+    .input(z.object({
+      access: openAIAccessSchema,
+      containerId: z.string(),
+      fileId: z.string(),
+    }))
+    .mutation(async ({ input: { access, containerId, fileId } }) => {
+      const { headers, url } = openAIAccess(access, null, `/v1/containers/${containerId}/files/${fileId}`);
+      try {
+        await fetchTextOrTRPCThrow({ url, headers, method: 'DELETE', name: 'OpenAI' });
+        return { success: true, alreadyGone: false };
+      } catch (error: any) {
+        // 404: the file is gone, or the whole container expired ("Container is expired.") - the outcome the caller wanted
+        if (error instanceof TRPCFetcherError && error.httpStatus === 404)
+          return { success: true, alreadyGone: true };
+        throw error;
+      }
     }),
 
 
@@ -331,6 +351,9 @@ export const llmOpenAIRouter = createTRPCRouter({
             model: config.model,
             prompt: config.prompt,
             ...(config.count > 1 && { n: config.count }), // note: the current client fans out count=1 requests instead, as most models cap n at 1
+            // least-strict content filters: BFL safety_tolerance 0-5 (default 2; >5 needs BFL authorization), OpenAI as the direct GPT Image default
+            ...(config.model.startsWith('black-forest-labs/') && { provider: { options: { 'black-forest-labs': { safety_tolerance: 5 } } } }),
+            ...(config.model.startsWith('openai/') && { provider: { options: { 'openai': { moderation: 'low' } } } }),
           },
           OPENROUTER_API_PATHS.images,
           signal,

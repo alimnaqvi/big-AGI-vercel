@@ -10,8 +10,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(HERE, '..', '..', '..');
 const OUT_ROOT = path.join(HERE, 'out');
 
@@ -29,7 +30,7 @@ function apiKey() {
 
 // ---- reference flagships: one per lab, keep current (edit freely)
 const DEFAULT_REFS = [
-  'openai/gpt-5.5',
+  'openai/gpt-6-sol', // current generation at 1/5 of Astra's price
   'anthropic/claude-opus-5',
   'google/gemini-3.7-flash',
   'x-ai/grok-4.6',

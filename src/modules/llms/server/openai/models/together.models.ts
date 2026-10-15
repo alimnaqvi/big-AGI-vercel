@@ -84,7 +84,6 @@ const _togetherAIRetiredIds = new Set<string>([
   'deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B',
   'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
   'deepseek-ai/DeepSeek-V3.1',
-  'deepseek-ai/DeepSeek-V4-Pro', // off serverless 2026-08-28; docs keep only the -0813 id
   'deepseek-ai/deepseek-coder-33b-instruct',
   // mistralai
   'mistralai/Ministral-3-14B-Instruct-2512',
@@ -97,12 +96,14 @@ const _togetherAIRetiredIds = new Set<string>([
   'NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO',
   'arcee-ai/trinity-mini',
   'google/gemma-2-27b-it',
+  'google/gemma-4-31B-it',
   'moonshotai/Kimi-K2.5-fp4',
   'moonshotai/Kimi-K2.6', // retired between the 2026-08-17 and -27 sweeps
   'moonshotai/Kimi-K2.7-Code', // 500 on the 08-28 sweep, standard 400 on re-probe
   'nvidia/Llama-3.1-Nemotron-70B-Instruct-HF',
   'nvidia/nemotron-3-ultra-550b-a55b', // off serverless 2026-08-28
   'nvidia/NVIDIA-Nemotron-Nano-9B-v2',
+  'openai/gpt-oss-20b',
 ]);
 
 // Vision (image input) id patterns - Together publishes no modality field, so these are the explicit
@@ -131,6 +132,7 @@ const _togetherVisionMatches: readonly (string | RegExp)[] = [
   'qwen3.8-flash', // scaling (123 -> 843 prompt tokens) + color check 2026-08-31; NOT all of qwen3.8: Together's Qwen3.8-2.4T-A95B is a text-only NVFP4 quant ('is not a multimodal model'), unlike Fireworks' serving of the same weights
   /glm-\d[\d.]*v\b/, // Z.ai vision line (GLM-4.5V, GLM-5V)
   'glm-5.3-flash', // multimodal Flash base, scaling+color check 2026-08-27 (the glm-5.3 text flagship rejects images), see zai.models.ts
+  'deepseek-v4.1-flash', // natively multimodal; fixed-size encoder (flat ~+185/image) that passes a color check, like Gemma
   '-omni', // omni-modal (Nemotron 3 Nano Omni)
   '-ocr', // OCR models are image-in by definition
 ];
@@ -158,6 +160,7 @@ const _togetherEditorialPubDates: Record<string, string> = {
   'nvidia/nemotron-3-ultra-550b-a55b': '20260604', // = nvidianim.models.ts (NVIDIA HF card: 'Release Date: 06/04/2026 via Hugging Face')
   'moonshotai/Kimi-K2.7-Code': '20260612',
   'zai-org/GLM-5.2': '20260616', // = zai.models.ts 'glm-5.2'
+  'zai-org/GLM-5.2-FP8': '20260616', // dedicated-only quant of the above (0/0-priced, no serverless row)
   'Qwen/Qwen3.7-Max': '20260622', // = alibaba.models.ts 'qwen3.7-max'
   'Prism-ML/Ternary-Bonsai-27B': '20260714', // PrismML announcement (prismml.com/news/bonsai-27b)
   'thinkingmachines/Inkling': '20260714', // = fireworksai.models.ts 'inkling'
@@ -168,8 +171,10 @@ const _togetherEditorialPubDates: Record<string, string> = {
   'Qwen/Qwen3.8-2.4T-A95B': '20260812', // = alibaba.models.ts 'qwen3.8-2.4t-a95b'
   'deepseek-ai/DeepSeek-V4-Pro-0813': '20260813', // 0813 GA weights, unlike the undated id above
   'zai-org/GLM-5.3': '20260814', // = zai.models.ts 'glm-5.3' - pre-announced then delisted by 2026-08-27; relisted and serving as of 2026-08-31
+  'zai-org/GLM-5.3-FP8': '20260814', // dedicated-only quant of the above (0/0-priced, no serverless row)
   'zai-org/GLM-5.3-Flash': '20260825', // = zai.models.ts 'glm-5.3-flash' (HF weights 2026-08-25)
   'Qwen/Qwen3.8-Flash': '20260826', // no alibaba.models.ts id yet: OpenRouter listing date - true up if DashScope lands one
+  'deepseek-ai/DeepSeek-V4.1-Flash': '20260910', // = deepseek.models.ts 'deepseek-flash'
 };
 
 /** 'YYYYMMDD' -> Unix epoch seconds (UTC midnight), 0 when absent - for list placement only */

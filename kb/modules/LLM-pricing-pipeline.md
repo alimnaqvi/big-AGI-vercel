@@ -34,7 +34,9 @@ Every parser fills the same particle (`AixWire_Particles.CGSelectMetrics`):
 | `TCacheWrite` | cache writes | `input_tokens_details.cache_write_tokens` | `cache_creation_input_tokens` | never | never |
 | `TOut`, `TOutR` | output, reasoning subset | `output_tokens`, `reasoning_tokens` | `output_tokens`, `thinking_tokens` | `candidatesTokenCount + thoughtsTokenCount` | as OpenAI |
 | `nWebSearch` | billed searches | `tool_usage.web_search.num_requests` | `server_tool_use.web_search_requests` | `groundingMetadata.webSearchQueries.length` | `server_side_tool_usage_details` web + X search |
-| `$xPrice` | served-tier multiplier | `service_tier`: default 1, flex 0.5, priority 2 | batch 0.5 x geo-us 1.1; absent when `speed: fast` | `usageMetadata.serviceTier`: flex/batch 0.5, priority 1.8 | `service_tier` |
+| `nWebFetch` | fetches (count only, no per-call fee) | - | `server_tool_use.web_fetch_requests` | - | - |
+| `nCodeExec` | code executions (count only; containers bill by time) | `code_interpreter_call` output items (usage carries no count) | `server_tool_use` blocks named `code_execution`, `bash_code_execution`, `text_editor_code_execution` (usage carries no count) | `executableCode` parts | as OpenAI |
+| `$xPrice` | served-tier multiplier | `service_tier`: default 1, flex 0.5, fast 2 (2.5 on GPT-5.5; `priority` is served as `fast`), ultrafast 6 | batch 0.5 x geo-us 1.1; absent when `speed: fast` | `usageMetadata.serviceTier`: flex/batch 0.5, priority 1.8 | `service_tier` |
 | `$cReported` | exact charge, cents | - | - | - | `cost_in_usd_ticks` / 1e10 (OpenRouter `cost`, Perplexity `total_cost` on Chat Completions) |
 
 Streaming specifics: OpenAI usage sits only on the terminal event, the tier already on `response.created`. Anthropic's `message_delta` carries the authoritative input side (server tool result tokens land there, not in `message_start`). Gemini usage is cumulative on every chunk; the cache count only on the last. Chat Completions mirrors the Responses fields under `prompt_tokens_details` / `completion_tokens_details`.
@@ -61,7 +63,7 @@ Unknown prices are the norm (dynamic vendors, OpenRouter rows without cache pric
 
 `$cReported` wins over `$c` for the headline and the service totals; `$c` stays as the estimate for reconciliation. `$xPrice` is stored only when not 1.
 
-Parameter-side multipliers (`enumPriceMultiplier` in the parameter registry) predict the tier before the response: `llmVndOaiServiceTier` flex 0.5 / fast 2, `llmVndAntInfSpeed` fast 2x or 6x. The echo corrects a downgrade.
+Parameter-side multipliers (`enumPriceMultiplier` in the parameter registry) predict the tier before the response: `llmVndOaiServiceTier` flex 0.5 / fast 2 / ultrafast 6, `llmVndAntInfSpeed` fast 2x or 6x. The echo corrects a downgrade.
 
 ## Surfaces
 
@@ -74,9 +76,10 @@ Parameter-side multipliers (`enumPriceMultiplier` in the parameter registry) pre
 ## Persistence
 
 - Model pricing: `app-models` localStorage, no version bump. A def-file change rolls the vendor's defs bucket and clients re-list, which replaces the persisted pricing.
-- Message metrics: additive optional fields only (`$cIn`, `$cCacheR`, `$cCacheW`, `$cOut`, `$cTools`, `$xPrice`, `nWebSearch`); older messages lack them.
+- Message metrics: additive optional fields only (`$cIn`, `$cCacheR`, `$cCacheW`, `$cOut`, `$cTools`, `$xPrice`, `nWebSearch`, `nWebFetch`, `nCodeExec`); older messages lack them.
+- Message tooltip: hosted tool counts on their own "Tools:" row, so the Tokens line stays one line.
 
 ## Verification
 
-The AIX protocol lab (`tools/develop/aix-protocol-lab`) replays real streams through the production parsers; check the `set-metrics` particle against the wire usage. Verified 2026-09-03 on OpenAI Luna (cache writes, searches, tier), Anthropic Haiku (delta input, searches), Gemini Flash-Lite (grounding queries, tier).
+The AIX protocol lab (`tools/develop/aix-protocol-lab`) replays real streams through the production parsers; check the `set-metrics` particle against the wire usage. Verified 2026-09-03 on GPT-5.6 Luna (cache writes, searches, tier), Anthropic Haiku (delta input, searches), Gemini Flash-Lite (grounding queries, tier).
 Verified 2026-09-04 on GPT-6 Astra through the same pipeline, app cost equal to the hand calculation on every run: the 272K tier switch on total input (198K vs 297K cold), cache writes at 1.25x in both tiers, cached replays read at the tier of the current request (a 198K cached prefix reads at the >272K rate once the conversation grows past 272K), and prefix caching survives the boundary. Caveat: the cache extends at item boundaries only - a longer text inside the same message part rewrites the whole prompt.

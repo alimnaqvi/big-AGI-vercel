@@ -7,7 +7,7 @@ import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 
 import type { DLLMMaxOutputTokens } from '~/common/stores/llms/llms.types';
-import { DModelParameterId, DModelParameterRegistry, DModelParameterSpec, DModelParameterSpecAny, DModelParameterValues, getAllModelParameterValues, LLMImplicitParametersRuntimeFallback } from '~/common/stores/llms/llms.parameters';
+import { DModelParameterId, DModelParameterRegistry, DModelParameterSpec, DModelParameterSpecAny, DModelParameterValue, DModelParameterValues, getAllModelParameterValues, LLMImplicitParametersRuntimeFallback } from '~/common/stores/llms/llms.parameters';
 import { FormSelectControl } from '~/common/components/forms/FormSelectControl';
 import { FormSliderControl } from '~/common/components/forms/FormSliderControl';
 import { FormSwitchControl } from '~/common/components/forms/FormSwitchControl';
@@ -60,7 +60,19 @@ const _miscEffortOptions = [
   { value: _UNSPECIFIED, label: 'Default', description: 'Model Default' } as const,
 ] as const;
 
-export function llmParametersFilterEffortOptions<T extends { value: string, label: string }>(options: readonly T[], spec: DModelParameterSpecAny | undefined, registryKey: keyof typeof DModelParameterRegistry): T[] | null {
+/** Registry values of K absent from an options table - `never` when the table lists them all */
+type _OptionsMissingValues<K extends DModelParameterId, T extends { value: string }> = Exclude<DModelParameterValue<K>, T['value']>;
+
+/**
+ * Narrows an options table to the values the model allows (its `enumValues`, else the registry's).
+ * Filtering only removes, so every table must list every registry value - typechecked per call site: a value
+ * added to the registry fails the build at every picker that lacks it, instead of silently never showing (#1228).
+ */
+export function llmParametersFilterEffortOptions<K extends DModelParameterId, T extends { value: string, label: string }>(
+  options: readonly T[] & ([_OptionsMissingValues<K, T>] extends [never] ? unknown : { missingRegistryValues: _OptionsMissingValues<K, T> }),
+  spec: DModelParameterSpecAny | undefined,
+  registryKey: K,
+): T[] | null {
   if (!spec) return null;
   const registry = DModelParameterRegistry[registryKey];
   const allowedSet = new Set((spec.enumValues as readonly string[] | undefined) ?? ('values' in registry ? registry.values : []));
@@ -84,9 +96,10 @@ const _oaiReasoningModeLegacyOptions = [
 ] as const;
 
 const _oaiServiceTierOptions = [
-  { value: 'fast', label: 'Fast', description: 'Up to 2.5x faster, 2x price' } as const,
-  { value: 'flex', label: 'Flex', description: 'Slower, half price' } as const,
   { value: _UNSPECIFIED, label: 'Standard', description: 'Standard processing' } as const,
+  { value: 'flex', label: 'Flex', description: 'Slower, half price' } as const,
+  { value: 'fast', label: 'Fast', description: 'Up to 2.5x faster, 2x price' } as const,
+  { value: 'ultrafast', label: 'Ultrafast', description: 'Up to 6x faster, 6x price' } as const,
 ] as const;
 
 const _verbosityOptions = [
@@ -120,9 +133,15 @@ const _geminiAspectRatioOptions = [
   { value: '3:2', label: '3:2', description: 'Landscape' },
   { value: '3:4', label: '3:4', description: 'Portrait' },
   { value: '4:3', label: '4:3', description: 'Landscape' },
+  { value: '4:5', label: '4:5', description: 'Portrait' },
+  { value: '5:4', label: '5:4', description: 'Landscape' },
   { value: '9:16', label: '9:16', description: 'Tall portrait' },
   { value: '16:9', label: '16:9', description: 'Wide landscape' },
   { value: '21:9', label: '21:9', description: 'Ultra wide' },
+  { value: '1:4', label: '1:4', description: 'Banner, tall' },
+  { value: '4:1', label: '4:1', description: 'Banner, wide' },
+  { value: '1:8', label: '1:8', description: 'Strip, tall' },
+  { value: '8:1', label: '8:1', description: 'Strip, wide' },
 ] as const;
 
 const _geminiImageSizeOptions = [
@@ -243,7 +262,7 @@ export function LLMParametersEditor(props: {
 
 
   // enum options: one memo for all vendors, filtered to each model's allowed values (via parameterSpec.enumValues)
-  const { antEffortOptions, gemEffortOptions, oaiEffortOptions, miscEffortOptions, oaiWebSearchOptions } = React.useMemo(() => {
+  const { antEffortOptions, gemEffortOptions, gemAspectRatioOptions, gemImageSizeOptions, oaiEffortOptions, miscEffortOptions, oaiServiceTierOptions, oaiWebSearchOptions } = React.useMemo(() => {
     // web search: filter to the model's allowed levels; when restricted to a single level (e.g. Sakana's
     // bare on/off web_search), relabel that lone level as a plain "On" (the "Off" entry is kept as-is).
     const ws = llmParametersFilterEffortOptions(_webSearchContextOptions, modelParamSpec['llmVndOaiWebSearchContext'], 'llmVndOaiWebSearchContext');
@@ -251,8 +270,11 @@ export function LLMParametersEditor(props: {
     return {
       antEffortOptions: llmParametersFilterEffortOptions(_antEffortOptions, modelParamSpec['llmVndAntEffort'], 'llmVndAntEffort'),
       gemEffortOptions: llmParametersFilterEffortOptions(_gemEffortOptions, modelParamSpec['llmVndGemEffort'], 'llmVndGemEffort'),
+      gemAspectRatioOptions: llmParametersFilterEffortOptions(_geminiAspectRatioOptions, modelParamSpec['llmVndGeminiAspectRatio'], 'llmVndGeminiAspectRatio'),
+      gemImageSizeOptions: llmParametersFilterEffortOptions(_geminiImageSizeOptions, modelParamSpec['llmVndGeminiImageSize'], 'llmVndGeminiImageSize'),
       oaiEffortOptions: llmParametersFilterEffortOptions(_oaiEffortOptions, modelParamSpec['llmVndOaiEffort'], 'llmVndOaiEffort'),
       miscEffortOptions: llmParametersFilterEffortOptions(_miscEffortOptions, modelParamSpec['llmVndMiscEffort'], 'llmVndMiscEffort'),
+      oaiServiceTierOptions: llmParametersFilterEffortOptions(_oaiServiceTierOptions, modelParamSpec['llmVndOaiServiceTier'], 'llmVndOaiServiceTier'),
       oaiWebSearchOptions: ws?.map(o => (wsOnOff && o.value !== _UNSPECIFIED) ? { ...o, label: 'On' } : o) ?? null,
     };
   }, [modelParamSpec]);
@@ -341,6 +363,7 @@ export function LLMParametersEditor(props: {
   const antThinkingEnabled = _antThinkingDefined && !!llmVndAntThinkingBudget; // both mullish mean "off"
   const antThinkingEnabled_Adaptive = antThinkingEnabled && llmVndAntThinkingBudget === -1;
   const antThinkingShown = _antThinkingDefined && !modelParamSpec['llmVndAntThinkingBudget']?.hidden;
+  const antThinkingAdaptiveOnly = modelParamSpec['llmVndAntThinkingBudget']?.initialValue === -1; // 4.6+ adaptive sentinel: a Thinking switch, not a budget slider
   const antInfSpeedTier = modelParamSpec['llmVndAntInfSpeed']?.enumValues?.[0];
   const antInfSpeedMult = antInfSpeedTier && DModelParameterRegistry['llmVndAntInfSpeed'].enumPriceMultiplier?.[antInfSpeedTier];
 
@@ -411,8 +434,22 @@ export function LLMParametersEditor(props: {
     )}
 
 
-    {/* pre-Effort: Anthropic [thinking budget, effort, ...] */}
-    {antThinkingShown && (
+    {/* pre-Effort: Anthropic [thinking switch (adaptive-only models, e.g. Opus 5, Sonnet 5.5) | thinking budget, effort, ...] */}
+    {antThinkingShown && antThinkingAdaptiveOnly ? (
+      <FormSwitchControl
+        title='Thinking'
+        description={antThinkingEnabled ? 'Adaptive (model decides)' : 'Off'}
+        tooltip='Adaptive: the model decides when and how much to reason. Off: no up-front reasoning, faster first token, effort capped at High.'
+        checked={antThinkingEnabled}
+        onChange={on => {
+          if (on) onRemoveParameter('llmVndAntThinkingBudget'); // back to the model's initial value (-1, adaptive)
+          else {
+            onChangeParameter({ llmVndAntThinkingBudget: null });
+            if (llmVndAntEffort === 'xhigh' || llmVndAntEffort === 'max') onRemoveParameter('llmVndAntEffort'); // not legal with thinking off
+          }
+        }}
+      />
+    ) : antThinkingShown && (
       <FormSliderControl
         title={antThinkingEnabled ? 'Thinking Budget' : 'Disabled'} ariaLabel='Anthropic Extended Thinking Token Budget'
         description='Tokens'
@@ -443,13 +480,13 @@ export function LLMParametersEditor(props: {
     {showParam('llmVndAntEffort') && antEffortOptions && (
       <FormSelectControl
         title='Effort'
-        tooltip='Controls thinking depth. Max = deepest reasoning with no constraints, High = default. Works alongside thinking budget.'
+        tooltip='Controls thinking depth. Max = deepest reasoning with no constraints. Works alongside thinking budget.'
         value={llmVndAntEffort ?? _UNSPECIFIED}
         onChange={(value) => {
           if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndAntEffort');
           else onChangeParameter({ llmVndAntEffort: value });
         }}
-        options={antEffortOptions}
+        options={antThinkingAdaptiveOnly && !antThinkingEnabled ? antEffortOptions.filter(o => o.value !== 'xhigh' && o.value !== 'max') : antEffortOptions} // xhigh/max need thinking on
       />
     )}
     {/* Gemini Thinking Level */}
@@ -492,16 +529,16 @@ export function LLMParametersEditor(props: {
       />
     )}
     {/* OpenAI Service Tier */}
-    {showParam('llmVndOaiServiceTier') && (
+    {showParam('llmVndOaiServiceTier') && oaiServiceTierOptions && (
       <FormSelectControl
         title='Service Tier'
-        tooltip='Fast: faster at 2x price. Flex: slower at half price. A downgraded request bills at standard rates.'
+        tooltip='Flex: slower at half price. Fast: faster at 2x price. Ultrafast: fastest at 6x price. A downgraded request bills at standard rates.'
         value={llmVndOaiServiceTier ?? _UNSPECIFIED}
         onChange={(value) => {
           if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndOaiServiceTier');
           else onChangeParameter({ llmVndOaiServiceTier: value });
         }}
-        options={_oaiServiceTierOptions}
+        options={oaiServiceTierOptions}
       />
     )}
     {/* Moonshot/Z.ai Thinking */}
@@ -709,7 +746,7 @@ export function LLMParametersEditor(props: {
     {/*  />*/}
     {/*)}*/}
 
-    {showParam('llmVndGeminiImageSize') && (
+    {showParam('llmVndGeminiImageSize') && gemImageSizeOptions && (
       <FormSelectControl
         title='Image Size'
         tooltip='Controls the resolution of generated images'
@@ -718,11 +755,11 @@ export function LLMParametersEditor(props: {
           if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiImageSize');
           else onChangeParameter({ llmVndGeminiImageSize: value });
         }}
-        options={_geminiImageSizeOptions}
+        options={gemImageSizeOptions}
       />
     )}
 
-    {showParam('llmVndGeminiAspectRatio') && (
+    {showParam('llmVndGeminiAspectRatio') && gemAspectRatioOptions && (
       <FormSelectControl
         title='Aspect Ratio'
         tooltip='Controls the aspect ratio of generated images'
@@ -731,7 +768,7 @@ export function LLMParametersEditor(props: {
           if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiAspectRatio');
           else onChangeParameter({ llmVndGeminiAspectRatio: value });
         }}
-        options={_geminiAspectRatioOptions}
+        options={gemAspectRatioOptions}
       />
     )}
 

@@ -2,6 +2,7 @@ import type { NextConfig } from 'next';
 import type { WebpackConfigContext } from 'next/dist/server/config-shared';
 import { execSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 
 // Log only on the first pass (next build evaluates this module twice: build() setup, then the webpack step)
@@ -24,7 +25,7 @@ process.env.NEXT_PUBLIC_BUILD_HASH = buildHash.slice(0, 10);
 process.env.NEXT_PUBLIC_BUILD_PKGVER = JSON.parse('' + readFileSync(new URL('./package.json', import.meta.url))).version;
 process.env.NEXT_PUBLIC_BUILD_TIMESTAMP = new Date().toISOString();
 process.env.NEXT_PUBLIC_DEPLOYMENT_TYPE ||= (process.env.VERCEL_ENV ? `vercel-${process.env.VERCEL_ENV}` : 'local'); // Docker or custom, Vercel
-log(`\x1b[1mBig-AGI\x1b[0m v${process.env.NEXT_PUBLIC_BUILD_PKGVER} (\x1b[2m@\x1b[0m${process.env.NEXT_PUBLIC_BUILD_HASH}${process.env.VERCEL_ENV ? `, \x1b[2mV:\x1b[0m${process.env.VERCEL_ENV}` : ''}, \x1b[2mN:\x1b[0m${process.env.NODE_ENV})`);
+log(`\x1b[1mBig-AGI\x1b[0m v${process.env.NEXT_PUBLIC_BUILD_PKGVER} (\x1b[2m@\x1b[0m${process.env.NEXT_PUBLIC_BUILD_HASH}, \x1b[2mN:\x1b[0m${process.env.NODE_ENV}${process.env.VERCEL_ENV ? `, \x1b[2mV:\x1b[0m${process.env.VERCEL_ENV}` : ''})`);
 
 
 // Handle non-default build types
@@ -64,7 +65,7 @@ let nextConfig: NextConfig = {
   serverExternalPackages: ['puppeteer-core'],
 
   // WEBPACK ONLY: turbopack skips this hook (client mocks, wasm) - never run --turbopack
-  webpack: (config: any, { isServer, webpack /*, dev, nextRuntime*/ }: WebpackConfigContext) => {
+  webpack: (config: any, { isServer, dev, webpack /*, nextRuntime*/ }: WebpackConfigContext) => {
     // @mui/joy: anything material gets redirected to Joy
     config.resolve.alias['@mui/material'] = '@mui/joy';
 
@@ -95,6 +96,17 @@ let nextConfig: NextConfig = {
         ),
       ];
 
+      // zustand, `next dev` only: app imports of the package resolve to the app's entry point (trace layer). Builds keep the package.
+      if (dev) {
+        const zustandUtils = fileURLToPath(new URL('./src/common/util/zustandUtils.ts', import.meta.url));
+        config.plugins.push(new webpack.NormalModuleReplacementPlugin(/^zustand(\/vanilla)?$/, (resource: any) => {
+          const issuer: string = resource.contextInfo?.issuer || '';
+          if (!issuer || /[\\/]node_modules[\\/]/.test(issuer) || issuer.endsWith('zustandUtils.ts')) return; // the package's own internals and the entry point keep the package
+          // console.log('- WEBPACK ZUSTAND REDIRECT:', resource.request, 'from', issuer); // console.log, not log(): the helper is silent past the first config pass
+          resource.request = zustandUtils;
+        }));
+      }
+
       // cosmetic: fix warnings for (absent!) top-level awaits in the browser (https://github.com/vercel/next.js/issues/64792)
       config.output.environment = { ...config.output.environment, asyncFunction: true };
     }
@@ -121,6 +133,12 @@ let nextConfig: NextConfig = {
       // Inspect: standalone static dev tools under /public/dev/inspect/*.html (clean URLs, no .html)
       // The (\w+) constraint excludes paths with a dot, so '/dev/inspect/storage.html' is still served directly.
       { source: '/dev/inspect/:tool(\\w+)', destination: '/dev/inspect/:tool.html' },
+    ];
+  },
+  async redirects() {
+    return [
+      // /preview: 2025 dark-launch marketing page (prod-only [PROD] commit) - Google indexed it, keep the 301 to preserve searchers
+      { source: '/preview', destination: 'https://big-agi.com/', permanent: true },
     ];
   },
 

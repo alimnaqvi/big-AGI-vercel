@@ -43,6 +43,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
   let collapsedTextPartForReasoning = false;
   let skipComputingTotalsOnce = isStreaming;
   let groundingIndexNumber = 0;
+  let nCodeExec = 0;
 
   // this can throw, it's caught by the caller
   return function(pt: IParticleTransmitter, rawEventData: string): void {
@@ -129,8 +130,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
       // the first end-1 packet will be skipped (when streaming)
       if (!skipComputingTotalsOnce) {
         metricsUpdate.dtAll = Date.now() - parserCreationTimestamp;
-        if (!isStreaming && metricsUpdate.dtAll > timeToFirstEvent)
-          metricsUpdate.dtInner = metricsUpdate.dtAll - timeToFirstEvent;
+        // non-streaming: no dtInner - the first event is the whole response, so (dtAll - timeToFirstEvent) is just our parse time
         if (isStreaming && metricsUpdate.TOut)
           metricsUpdate.vTOutInner = Math.round(100 * 1000 /*ms/s*/ * metricsUpdate.TOut / (metricsUpdate.dtInner || metricsUpdate.dtAll)) / 100;
       }
@@ -247,6 +247,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
             if (DEV_DEBUG_MISSING_IDS && !mPart.executableCode.id)
               console.log('[DEV] Gemini executableCode missing id');
             pt.addCodeExecutionInvocation(mPart.executableCode.id ?? null, mPart.executableCode.language || '', mPart.executableCode.code || '', 'gemini_auto_inline');
+            pt.updateMetrics({ nCodeExec: ++nCodeExec }); // counted, not per-call billed
             break;
 
           // <- CodeExecutionResultPart

@@ -38,6 +38,7 @@ const _vndAntInlineFilesOptions: FormSelectOption<AIVndAntInlineFilesPolicy>[] =
   { value: 'off', label: 'Show', description: 'Keep as links' },
   { value: 'inline-file', label: 'Embed', description: 'Default, embed in chat' },
   { value: 'inline-file-and-delete', label: 'Embed + Free', description: 'Embed, then free' },
+  { value: 'discard', label: 'Discard', description: 'Free, never embed' },
 ] as const;
 
 const _tokenCountingMethodOptions: FormSelectOption<TokenCountingMethod>[] = [
@@ -174,6 +175,7 @@ export function AppChatSettingsAI() {
           <li><b>Show</b>: keep as references.</li>
           <li><b>Embed</b>: download and embed text/images (default).</li>
           <li><b>Embed + Free</b>: embed, then delete from Anthropic to free storage.</li>
+          <li><b>Discard</b>: delete from Anthropic without embedding; the file stays in the code sandbox for the model.</li>
         </ul>
         Only affects Anthropic models.
       </>}
@@ -220,7 +222,7 @@ export function AppChatSettingsAI() {
         title='Generative UIs'
         description={autoSuggestHTMLUI ? 'Add HTML' : 'Off'}
         tooltipWarning={autoSuggestHTMLUI}
-        tooltip={<>
+        tooltip={!autoSuggestHTMLUI ? undefined : <>
           [Coding model] Creates interactive UI components within chat responses when appropriate.
           <hr />
           SECURITY WARNING: THIS TURNS ON JS/HTML CODE EXECUTION WITHIN CHAT MESSAGES

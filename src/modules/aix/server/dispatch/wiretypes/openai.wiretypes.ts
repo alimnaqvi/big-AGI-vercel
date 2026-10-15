@@ -17,11 +17,12 @@ import * as z from 'zod/v4';
 
 /**
  * Processing tier - request and response, Chat Completions and Responses (xAI echoes it too).
- * Request: 'flex' (0.5x, slower), 'fast' (2x, up to 2.5x faster; 'priority' is the legacy name, still accepted), 'default', 'auto'.
- * Response: the tier actually served - 'default' on a downgraded fast/flex request, 'priority' for fast.
- * Open to new tiers ('ultrafast' is gated today) rather than failing on an unknown value.
+ * Request: 'flex' (0.5x, slower), 'fast' (2x, up to 2.5x faster; 'priority' is the legacy name, still accepted), 'default', 'auto',
+ * 'ultrafast' (6x, up to 6x faster; 2026-09-29: Responses only, per model - 400 "Invalid service_tier argument" elsewhere).
+ * Response: the tier actually served - 'default' on a downgraded fast/flex request, 'priority' for fast, 'ultrafast' as is.
+ * Open to new tiers rather than failing on an unknown value.
  */
-const OpenAIWire_ServiceTier_schema = z.enum(['auto', 'default', 'flex', 'fast', 'priority']).or(z.string());
+const OpenAIWire_ServiceTier_schema = z.enum(['auto', 'default', 'flex', 'fast', 'priority', 'ultrafast']).or(z.string());
 
 
 export namespace OpenAIWire_ContentParts {
@@ -377,7 +378,7 @@ export namespace OpenAIWire_API_Chat_Completions {
 
     // [OpenRouter, 2025-12-31] Extension for Image Generation Configuration (works with Gemini models at the beginning)
     image_config: z.object({
-      aspect_ratio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9']).optional(),
+      aspect_ratio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9', '1:4', '4:1', '1:8', '8:1']).optional(),
       image_size: z.enum(['1K', '2K', '4K']).optional(),
     }).optional(),
 

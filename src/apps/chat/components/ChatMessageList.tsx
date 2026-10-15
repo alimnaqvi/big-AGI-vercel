@@ -12,24 +12,28 @@ import { speakText, speakTextSurfaceFailure } from '~/modules/speex/speex.client
 
 import type { ConversationHandler } from '~/common/chat-overlay/ConversationHandler';
 import type { DLLMContextTokens } from '~/common/stores/llms/llms.types';
+import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
 import { DConversationId, excludeSystemMessages } from '~/common/stores/chat/chat.conversation';
 import { ShortcutKey, useGlobalShortcuts } from '~/common/components/shortcuts/useGlobalShortcuts';
 import { clipboardInterceptCtrlCForCleanup } from '~/common/util/clipboardUtils';
 import { convertFilesToDAttachmentFragments } from '~/common/attachment-drafts/attachment.pipeline';
 import { createDMessageFromFragments, createDMessageTextContent, DMessage, DMessageGenerator, DMessageId, DMessageUserFlag, DMetaReferenceItem, MESSAGE_FLAG_AIX_SKIP, messageHasUserFlag } from '~/common/stores/chat/chat.message';
 import { createTextContentFragment, DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
+import { getRenderHTMLInitial } from '~/common/stores/store-ui';
 import { openFileForAttaching } from '~/common/components/ButtonAttachFiles';
 import { optimaOpenPreferences } from '~/common/layout/optima/useOptima';
+import { themeMinWidthChatPane } from '~/common/app.theme';
 import { useChatOverlayStore } from '~/common/chat-overlay/store-perchat_vanilla';
 import { useChatStore } from '~/common/stores/chat/store-chats';
+import { useOverlayComponents } from '~/common/layout/overlays/useOverlayComponents';
 import { useScrollToBottom } from '~/common/scroll-to-bottom/useScrollToBottom';
 
 import { CMLZeroConversation } from './messages-list/CMLZeroConversation';
-import { ChatMessage, ChatMessageMemo } from './message/ChatMessage';
+import { ChatMessageStreamingMemo } from './message/ChatMessage';
 import { CleanerMessage, MessagesSelectionHeader } from './message/CleanerMessage';
 import { Ephemerals } from './Ephemerals';
 import { PersonaSelector } from './persona-selector/PersonaSelector';
-import { useChatAutoSuggestHTMLUI, useChatShowSystemMessages } from '../store-app-chat';
+import { useChatShowSystemMessages, useChatMessageTimestampMode } from '../store-app-chat';
 
 
 const stableNoMessages: DMessage[] = [];
@@ -62,9 +66,10 @@ export function ChatMessageList(props: {
   const [selectedMessages, setSelectedMessages] = React.useState<Set<string>>(new Set());
 
   // external state
+  const { showPromisedOverlay } = useOverlayComponents();
   const { notifyBooting } = useScrollToBottom();
-  const danger_experimentalHtmlWebUi = useChatAutoSuggestHTMLUI();
   const [showSystemMessages] = useChatShowSystemMessages();
+  const [messageTimestampMode] = useChatMessageTimestampMode();
   const { conversationMessages, historyTokenCount } = useChatStore(useShallow(({ conversations }) => {
     const conversation = conversations.find(conversation => conversation.id === props.conversationId);
     return {
@@ -80,7 +85,10 @@ export function ChatMessageList(props: {
   // derived state
   const { conversationHandler, conversationId, capabilityHasT2I, onConversationBranch, onConversationExecuteHistory, onTextDiagram, onTextImagine } = props;
   const composerCanAddInReferenceTo = _composerInReferenceToCount < 5;
-  const composerHasInReferenceto = _composerInReferenceToCount > 0;
+  const composerHasInReferenceTo = _composerInReferenceToCount > 0;
+
+  const firstUserMessageId = messageTimestampMode === 'auto' ? conversationMessages.find(message => message.role === 'user')?.id : undefined;
+  const lastMessageId = conversationMessages.at(-1)?.id;
 
   // text actions
 
@@ -126,9 +134,10 @@ export function ChatMessageList(props: {
 
 
   // Resume in-flight tracking - lives at this level (NOT inside BlockOpUpstreamResume) so it
-  // survives any remount of the message bubble during a long-running stream (e.g. Deep Research).
+  // survives an unmount of the message bubble during a long-running stream (e.g. Deep Research):
+  // pane switch, cleanup mode, ancestry collapse. Completion itself no longer remounts the message.
   // - `resumeInFlight` (state) drives the loading/Detach UI on BlockOpUpstreamResume via props.
-  // - `resumeAbortersRef` (ref) holds the AbortController so Detach can abort even after a remount.
+  // - `resumeAbortersRef` (ref) holds the AbortController so Detach can abort even after an unmount.
   // Map keyed by messageId so multiple messages could in principle resume concurrently.
   const [resumeInFlight, setResumeInFlight] = React.useState<Record<DMessageId, AixReattachMode>>({});
   const resumeAbortersRef = React.useRef<Map<DMessageId, AbortController>>(new Map());
@@ -337,10 +346,21 @@ export function ChatMessageList(props: {
     setSelectedMessages(newSelected);
   };
 
-  const handleSelectionDelete = React.useCallback(() => {
-    conversationHandler?.messagesDelete(Array.from(selectedMessages));
+  const handleSelectionDelete = React.useCallback(async () => {
+    if (!conversationHandler || !selectedMessages.size) return;
+    const messageIds = Array.from(selectedMessages);
+    const confirmed = await showPromisedOverlay('chat-message-delete-confirmation', { rejectWithValue: false }, ({ onResolve, onUserReject }) =>
+      <ConfirmationModal
+        open onClose={onUserReject} onPositive={() => onResolve(true)}
+        title='Delete Messages'
+        confirmationText={`Permanently delete ${messageIds.length} selected message${messageIds.length === 1 ? '' : 's'}? This cannot be undone.`}
+        positiveActionText='Delete'
+      />,
+    );
+    if (!confirmed) return;
+    conversationHandler.messagesDelete(messageIds);
     setSelectedMessages(new Set());
-  }, [conversationHandler, selectedMessages]);
+  }, [conversationHandler, selectedMessages, showPromisedOverlay]);
 
   const handleSelectionToggleVisibility = React.useCallback(() => {
     for (let selectedMessage of Array.from(selectedMessages))
@@ -383,7 +403,7 @@ export function ChatMessageList(props: {
     ...props.sx,
 
     // we added these after removing the minSize={20} (%) from the containing panel.
-    minWidth: '18rem',
+    minWidth: themeMinWidthChatPane,
     // minHeight: '180px', // not need for this, as it's already an overflow scrolling container, so one can reduce it to a pixel
 
     // fix for the double-border on the last message (one by the composer, one to the bottom of the message)
@@ -429,13 +449,6 @@ export function ChatMessageList(props: {
 
       {filteredMessages.map((message, idx) => {
 
-          // Optimization: only memo complete components, or we'd be memoizing garbage (fragments
-          // change every chunk during streaming, so the equality check would always fail).
-          // CAVEAT: switching between memo and non-memo at the same position causes React to
-          // remount the subtree (different component types). Any state that must survive that
-          // boundary lives on this component (e.g. resumeInFlight, resumeAbortersRef).
-          const ChatMessageMemoOrNot = !message.pendingIncomplete ? ChatMessageMemo : ChatMessage;
-
           return props.isMessageSelectionMode ? (
 
             <CleanerMessage
@@ -447,18 +460,19 @@ export function ChatMessageList(props: {
 
           ) : (
 
-            <ChatMessageMemoOrNot
+            <ChatMessageStreamingMemo
               key={'msg-' + message.id}
               message={message}
               // diffPreviousText={message === diffTargetMessage ? diffPrevText : undefined}
               fitScreen={props.fitScreen}
-              hasInReferenceTo={composerHasInReferenceto}
+              hasInReferenceTo={composerHasInReferenceTo}
+              showTimestamp={messageTimestampMode === 'all' || (messageTimestampMode === 'auto' && (message.id === firstUserMessageId || message.id === lastMessageId))}
               isMobile={props.isMobile}
               isBottom={idx === filteredMessages.length - 1}
               isImagining={isImagining}
               isSpeaking={isSpeaking}
               showAntPromptCaching={props.chatLLMAntPromptCaching}
-              showUnsafeHtmlCode={danger_experimentalHtmlWebUi}
+              htmlRenderVariant={getRenderHTMLInitial() ? 'render-at-end' : 'show-code'}
               onAddInReferenceTo={!composerCanAddInReferenceTo ? undefined : handleAddInReferenceTo}
               onMessageAssistantFrom={handleMessageAssistantFrom}
               onMessageBeam={handleMessageBeam}
