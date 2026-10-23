@@ -3,6 +3,7 @@ import { ortWebToolsToAixModel } from '~/modules/llms/vendors/openrouter/openrou
 
 import { vertexLinksAutoResolveFragments } from '~/modules/google/vertexai.client';
 
+import type { Immutable } from '~/common/types/immutable.types';
 import type { MaybePromise } from '~/common/types/useful.types';
 import { AIVndAntInlineFilesPolicy, getVndAntInlineFiles } from '~/common/stores/store-ai';
 import { AudioPlayer } from '~/common/util/audio/AudioPlayer';
@@ -77,7 +78,7 @@ export function aixCreateModelFromLLMOptions(
     llmVndAntEffort, llmVndGemEffort, llmVndOaiEffort, llmVndMiscEffort,
     llmVndAnt1MContext, llmVndAntCodeSandbox, llmVndAntInfSpeed, llmVndAntSkills, llmVndAntThinkingBudget, llmVndAntWebDynamic, llmVndAntWebFetch, llmVndAntWebFetchMaxUses, llmVndAntWebSearch, llmVndAntWebSearchMaxUses,
     llmVndBedrockAPI,
-    llmVndGeminiAgentViz, llmVndGeminiAspectRatio, llmVndGeminiImageSize, llmVndGeminiCodeExecution, llmVndGeminiComputerUse, llmVndGeminiGoogleSearch, llmVndGeminiMediaResolution, llmVndGeminiThinkingBudget,
+    llmVndGeminiAgentViz, llmVndGeminiAspectRatio, llmVndGeminiImageSize, llmVndGeminiCodeExecution, llmVndGeminiComputerUse, llmVndGeminiGoogleSearch, llmVndGeminiMediaResolution, llmVndGeminiThinkingBudget, llmVndGeminiUrlContext,
     // llmVndMoonshotWebSearch,
     llmVndOaiReasoningMode, llmVndOaiRestoreMarkdown, llmVndOaiServiceTier, llmVndOaiVerbosity, llmVndOaiWebSearchContext, llmVndOaiWebSearchGeolocation, llmVndOaiImageGeneration, llmVndOaiCodeInterpreter,
     llmVndOrtWebFetch, llmVndOrtWebSearch, llmVndOrtWebToolsAdvanced,
@@ -157,14 +158,11 @@ export function aixCreateModelFromLLMOptions(
     ...(llmVndGeminiAspectRatio ? { vndGeminiAspectRatio: llmVndGeminiAspectRatio } : {}),
     ...(llmVndGeminiCodeExecution === 'auto' ? { vndGeminiCodeExecution: llmVndGeminiCodeExecution } : {}),
     ...(llmVndGeminiComputerUse ? { vndGeminiComputerUse: llmVndGeminiComputerUse } : {}),
-    ...(llmVndGeminiGoogleSearch ? {
-      vndGeminiGoogleSearch: llmVndGeminiGoogleSearch,
-      vndGeminiUrlContext: 'auto', // NOTE: we are now driving both from the client side, search and fetch, without a dedicated setting, for UX simplicity
-    } : {}),
+    ...(llmVndGeminiGoogleSearch ? { vndGeminiGoogleSearch: llmVndGeminiGoogleSearch } : {}),
     ...(llmVndGeminiImageSize ? { vndGeminiImageSize: llmVndGeminiImageSize } : {}),
     ...(llmVndGeminiMediaResolution ? { vndGeminiMediaResolution: llmVndGeminiMediaResolution } : {}),
     ...(llmVndGeminiThinkingBudget !== undefined ? { vndGeminiThinkingBudget: llmVndGeminiThinkingBudget } : {}),
-    // ...(llmVndGeminiUrlContext === 'auto' ? { vndGeminiUrlContext: llmVndGeminiUrlContext } : {}),
+    ...(llmVndGeminiUrlContext === 'auto' ? { vndGeminiUrlContext: llmVndGeminiUrlContext } : {}),
 
     // Moonshot
     // ...(llmVndMoonshotWebSearch === 'auto' ? { vndMoonshotWebSearch: 'auto' } : {}),
@@ -235,7 +233,7 @@ interface AixClientOptions {
 
   // LLM parameter configuration layers: full replacement of user params and/or overrides of a set of individual params
   llmUserParametersReplacement?: DModelParameterValues; // can replace the 'global' llm user configuration with an alternate config (e.g. persona, or per-chat)
-  llmOptionsOverride?: Omit<DModelParameterValues, 'llmRef'>; // overrides (sets/replaces) individual LLM parameters
+  llmParamsWrite?: Omit<DModelParameterValues, 'llmRef'>; // overrides (sets/replaces) individual LLM parameters
 
   // -- Session State - extract? --
   // Cross-turn sandbox/container handles. Caller may pre-populate; resolver walks chat history to fill any unset slot.
@@ -263,7 +261,7 @@ interface AixClientOptions {
  */
 type _UC = NonNullable<DMessageGenerator['upstreamContainer']>;
 
-function _findRecentUpstreamContainer<Uct extends _UC['uct']>(history: readonly DMessage[], uct: Uct, expiryBufferMs = 15_000): Extract<_UC, { uct: Uct }> | null {
+function _findRecentUpstreamContainer<Uct extends _UC['uct']>(history: Immutable<DMessage[]>, uct: Uct, expiryBufferMs = 15_000): Extract<_UC, { uct: Uct }> | null {
   for (let i = history.length - 1; i >= 0; i--) {
     const uc = history[i].generator?.upstreamContainer;
     if (uc?.uct !== uct) continue;
@@ -312,8 +310,8 @@ export type AixChatGenerateContent_FromConversation_Result = {
 export async function aixChatGenerateContent_DMessage_FromConversation(
   // chat-inputs -> Partial<DMessage> outputs
   llmId: DLLMId,
-  chatSystemInstruction: null | Pick<DMessage, 'fragments' | 'metadata' | 'userFlags'>,
-  chatHistoryWithoutSystemMessages: Readonly<DMessage[]>,
+  chatSystemInstruction: null | Pick<Immutable<DMessage>, 'fragments' | 'metadata' | 'userFlags'>,
+  chatHistoryWithoutSystemMessages: Immutable<DMessage[]>,
   // aix inputs
   aixContextName: AixAPI_Context_ChatGenerate['name'],
   aixContextRef: AixAPI_Context_ChatGenerate['ref'],
@@ -455,7 +453,7 @@ export async function aixChatGenerateText_Simple(
 
   // Aix Model
   const llmParameters = getAllModelParameterValues(llm.initialParameters, clientOptions?.llmUserParametersReplacement ?? llm.userParameters);
-  const aixModel = aixCreateModelFromLLMOptions(llm.interfaces, llmParameters, clientOptions?.llmOptionsOverride, llmId);
+  const aixModel = aixCreateModelFromLLMOptions(llm.interfaces, llmParameters, clientOptions?.llmParamsWrite, llmId);
 
   // Aix ChatGenerate Request
   const aixChatGenerate = aixCGR_FromSimpleText(
@@ -648,7 +646,7 @@ export async function aixChatGenerateContent_DMessage_orThrow<TServiceSettings e
 
   // Aix Model
   const llmParameters = getAllModelParameterValues(llm.initialParameters, clientOptions?.llmUserParametersReplacement ?? llm.userParameters);
-  const aixModel = aixCreateModelFromLLMOptions(llm.interfaces, llmParameters, clientOptions?.llmOptionsOverride, llmId);
+  const aixModel = aixCreateModelFromLLMOptions(llm.interfaces, llmParameters, clientOptions?.llmParamsWrite, llmId);
   aixDecorateModelFromGlobals(aixModel, {
     vndAntContainerId: clientOptions?.antContainerId,
     vndOaiContainerId: clientOptions?.oaiContainerId,

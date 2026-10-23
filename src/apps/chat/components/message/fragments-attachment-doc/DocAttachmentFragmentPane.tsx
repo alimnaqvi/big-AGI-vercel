@@ -53,7 +53,7 @@ function _inferInitialViewAsCode(attachmentFragment: DMessageAttachmentFragment)
 }
 
 
-export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragment(props: {
+export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragmentPane(props: {
   fragment: DMessageAttachmentFragment,
   controlledEditor: boolean,
   editedText?: string,
@@ -61,7 +61,6 @@ export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragme
   messageRole: DMessageRole,
   contentScaling: ContentScaling,
   isMobile: boolean,
-  zenMode: boolean,
   disableMarkdownText: boolean,
   onFragmentDelete?: (fragmentId: DMessageFragmentId) => void,
   onFragmentReplace?: (fragmentId: DMessageFragmentId, newContent: DMessageAttachmentFragment) => void,
@@ -359,7 +358,7 @@ export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragme
               startDecorator={showDeleteInstead ? <DeleteForeverIcon /> : props.controlledEditor ? undefined : <CheckRoundedIcon />}
               sx={_styles.button}
             >
-              {!showDeleteInstead ? 'Save' : 'Delete'}
+              {!showDeleteInstead ? (props.controlledEditor ? 'Ok' : 'Save') : 'Delete'}
             </Button>
           )}
         </Box>

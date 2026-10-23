@@ -35,6 +35,7 @@ import { copyToClipboard, supportsClipboardRead } from '~/common/util/clipboardU
 import { createHostedResourceContentFragment, createTextContentFragment, DMessageAttachmentFragment, DMessageContentFragment, duplicateDMessageFragments } from '~/common/stores/chat/chat.fragments';
 import { glueForMessageTokens, marshallWrapDocFragments } from '~/common/stores/chat/chat.tokens';
 import { isValidConversation, useChatStore } from '~/common/stores/chat/store-chats';
+import { orderedUserFragments } from '~/common/stores/chat/chat.fragment-order';
 import { getModelParameterValueWithFallback } from '~/common/stores/llms/llms.parameters';
 import { launchAppCall, removeQueryParam, useRouterQuery } from '~/common/app.routes';
 import { lineHeightTextareaMd, themeBgAppChatComposer } from '~/common/app.theme';
@@ -58,10 +59,11 @@ import type { AttachmentDraftId, AttachmentDraftsAction } from '~/common/attachm
 import { AttachmentInputEnhancersOptions, attachmentEnhancersPlaceholderHints } from '~/common/attachment-drafts/attachment.enhancers';
 import { AttachmentSourcesMemo } from '~/common/attachment-drafts/attachment-sources/AttachmentSources';
 import { useAttachmentDrafts } from '~/common/attachment-drafts/useAttachmentDrafts';
-import { useAttachmentDraftsEnrichment } from '~/common/attachment-drafts/llm-enrichment/useAttachmentDraftsEnrichment';
+import { useLLMImageInputPolicy } from '~/common/attachment-drafts/llm-enrichment/useLLMImageInputPolicy';
 import { useGoogleDrivePicker } from '~/common/attachment-drafts/attachment-sources/useGoogleDrivePicker';
 
 import type { ChatExecuteMode } from '../../execute-mode/execute-mode.types';
+import { getUserMessageFragmentPlacement } from '../../store-app-chat';
 import { chatExecuteModeCanAttach, useChatExecuteMode } from '../../execute-mode/useChatExecuteMode';
 
 import { ButtonBeamMemo } from './buttons/ButtonBeam';
@@ -74,6 +76,7 @@ import { ButtonOptionsDraw } from './buttons/ButtonOptionsDraw';
 import { COMPOSER_INPUT_ENHANCERS } from './composer.input-enhancers';
 import { useComposerEnhancerHint } from './useComposerEnhancerHint';
 import { ComposerAttachmentDraftsList } from './llmattachments/ComposerAttachmentDraftsList';
+import { InReferenceToBubble } from '../message/in-reference-to/InReferenceToBubble';
 import { ComposerTextAreaActions } from './textarea/ComposerTextAreaActions';
 import { ComposerTextAreaDrawActions } from './textarea/ComposerTextAreaDrawActions';
 import { StatusBarMemo } from '../StatusBar';
@@ -215,7 +218,7 @@ export function Composer(props: {
   } = useAttachmentDrafts(conversationOverlayStore, enableLoadURLsInComposer, chatLLMSupportsImages, handleFilterAGIFile, showChatAttachments === 'only-images', enhancersOptions);
 
   // attachments derived state
-  const { enrichment: attEnrichment, summary: attEnrichSummary } = useAttachmentDraftsEnrichment(attachmentDrafts, props.chatLLM, chatLLMSupportsImages);
+  const { attEnrichment, attEnrichSummary, confirmUnsupportedLLMAttachments } = useLLMImageInputPolicy(props.chatLLM, attachmentDrafts);
 
   // drag/drop
   const { dragContainerSx, dropComponent, handleContainerDragEnter, handleContainerDragStart } = useComposerDragDrop(!props.isMobile, attachAppendDataTransfer);
@@ -285,24 +288,6 @@ export function Composer(props: {
   }, [composerTextAreaRef, inReferenceTo]);
 
 
-  // Confirmation Modals
-
-  const confirmProceedIfAttachmentsNotSupported = React.useCallback(async (): Promise<boolean> => {
-    if (attEnrichSummary.allCompatible) return true;
-    return await showPromisedOverlay('composer-unsupported-attachments', { rejectWithValue: false }, ({ onResolve, onUserReject }) => (
-      <ConfirmationModal
-        open
-        onClose={onUserReject}
-        onPositive={() => onResolve(true)}
-        confirmationText='Some attached files may not be fully compatible with the current AI model. This could affect processing. Would you like to review or proceed?'
-        positiveActionText='Proceed'
-        negativeActionText='Review Attachments'
-        title='Attachment Compatibility Notice'
-      />
-    ));
-  }, [attEnrichSummary.allCompatible, showPromisedOverlay]);
-
-
   // Primary button
 
   const _handleClearText = React.useCallback(() => {
@@ -317,7 +302,7 @@ export function Composer(props: {
     if (!isValidConversation(targetConversationId)) return false;
 
     // await user confirmation (or rejection) if attachments are not supported
-    if (!await confirmProceedIfAttachmentsNotSupported()) return false;
+    if (!await confirmUnsupportedLLMAttachments()) return false;
 
     // validate some chat mode inputs
     const isDraw = _chatExecuteMode === 'generate-image';
@@ -334,7 +319,7 @@ export function Composer(props: {
 
     const canAttach = chatExecuteModeCanAttach(_chatExecuteMode, props.capabilityHasT2IEdit);
     if (canAttach) {
-      // enhancer-pending parts (e.g. video URLs) become content fragments after the text
+      // Enhancer-pending media and uploaded files join the same send-order policy.
       fragments.push(...(pendingParts || []).map(part => createHostedResourceContentFragment(part.resource)));
       const attachmentFragments = await attachmentsTakeAllFragments('global', 'app-chat');
       fragments.push(...attachmentFragments);
@@ -349,11 +334,12 @@ export function Composer(props: {
     const metadata = inReferenceTo?.length ? { inReferenceTo: inReferenceTo } : undefined;
 
     // send the message - NOTE: if successful, the ownership of the fragments is transferred to the receiver, so we just clear them
-    const enqueued = onAction(targetConversationId, _chatExecuteMode, fragments, metadata);
+    const sortedUserFragments = orderedUserFragments(fragments, getUserMessageFragmentPlacement());
+    const enqueued = onAction(targetConversationId, _chatExecuteMode, sortedUserFragments, metadata);
     if (enqueued)
       _handleClearText();
     return enqueued;
-  }, [targetConversationId, confirmProceedIfAttachmentsNotSupported, composerTextSuffix, props.capabilityHasT2IEdit, inReferenceTo, onAction, _handleClearText, attachmentsTakeAllFragments, pendingParts]);
+  }, [targetConversationId, confirmUnsupportedLLMAttachments, composerTextSuffix, props.capabilityHasT2IEdit, inReferenceTo, onAction, _handleClearText, attachmentsTakeAllFragments, pendingParts]);
 
   const handleSendAction = React.useCallback(async (chatExecuteMode: ChatExecuteMode, composerText: string): Promise<boolean> => {
     setSendStarted(true);
@@ -549,7 +535,8 @@ export function Composer(props: {
     providerStarredMessages(onActileEmbedMessage),
   ], [conversationOverlayStore, onActileCommandPaste, onActileEmbedMessage]);
 
-  const { actileComponent, actileInterceptKeydown, actileInterceptTextChange } = useActileManager(actileProviders, composerTextAreaRef);
+  const disableActile = chatExecuteMode === 'generate-image';
+  const { actileComponent, actileInterceptKeydown, actileInterceptTextChange } = useActileManager(!disableActile, actileProviders, composerTextAreaRef);
 
 
   // Type...
@@ -863,14 +850,37 @@ export function Composer(props: {
                       />
                       : <ComposerTextAreaActions
                         agiAttachmentPrompts={agiAttachmentPrompts}
-                        inReferenceTo={inReferenceTo}
-                        pendingParts={pendingParts}
-                        pendingPartsEnhancers={COMPOSER_INPUT_ENHANCERS}
-                        enhancerDisabledHint={enhancerHintItem}
                         onAppendAndSend={handleAppendTextAndSend}
-                        onRemoveReferenceTo={handleRemoveInReferenceTo}
-                        onRemovePendingPart={handleRemovePendingPart}
-                      />
+                      >
+                        {(!!inReferenceTo?.length || !!pendingParts?.length || !!enhancerHintItem) && (
+                          <>
+                            {/* In-Reference-To bubbles */}
+                            {inReferenceTo?.map((item, index) => (
+                              <InReferenceToBubble
+                                key={index}
+                                item={item}
+                                onRemove={handleRemoveInReferenceTo}
+                                className='within-composer-focus'
+                              />
+                            ))}
+
+                            {/* Enhancer-pending part chips (e.g. video URLs) - dispatched to the owning enhancer's renderer */}
+                            {pendingParts?.map((part, index) => {
+                              const enhancer = COMPOSER_INPUT_ENHANCERS.find(e => e.ownsPart(part));
+                              if (!enhancer) return null;
+                              const PendingChip = enhancer.PendingChip;
+                              return <PendingChip key={index} part={part} onRemove={() => handleRemovePendingPart(part)} />;
+                            })}
+
+                            {/* Capability hint from a disabled enhancer (e.g. video URL pasted on a non-video model) */}
+                            {!!enhancerHintItem && COMPOSER_INPUT_ENHANCERS.map(enhancer => {
+                              const DisabledMatchHint = enhancer.DisabledMatchHint;
+                              if (!DisabledMatchHint || !enhancer.ownsPart(enhancerHintItem.part)) return null;
+                              return <DisabledMatchHint key={enhancer.id} {...enhancerHintItem} />;
+                            })}
+                          </>
+                        )}
+                      </ComposerTextAreaActions>
                     }
                     slotProps={{
                       textarea: {
@@ -981,6 +991,7 @@ export function Composer(props: {
                   enrichment={attEnrichment}
                   enrichmentSummary={attEnrichSummary}
                   agiAttachmentPrompts={agiAttachmentPrompts}
+                  hasPendingMedia={!!pendingParts?.length}
                   onAttachmentDraftsAction={handleAttachmentDraftsAction}
                 />
               )}

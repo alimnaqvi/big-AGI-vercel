@@ -8,12 +8,13 @@ import { BeamStore, createBeamVanillaStore } from '~/modules/beam/store-beam_van
 import { autoConversationTitle } from '~/modules/aifn/autotitle/autoTitle';
 import { useModuleBeamStore } from '~/modules/beam/store-module-beam';
 
+import type { DBlobAssetId } from '~/common/stores/blob/dblobs-portability';
 import type { DConversationId } from '~/common/stores/chat/chat.conversation';
 import type { DLLMId } from '~/common/stores/llms/llms.types';
 import { ChatActions, getConversationSystemPurposeId, isValidConversation, useChatStore } from '~/common/stores/chat/store-chats';
 import { createDMessageEmpty, createDMessageFromFragments, createDMessagePlaceholderIncomplete, createDMessageTextContent, DMessage, DMessageGenerator, DMessageId, DMessageUserFlag, MESSAGE_FLAG_VND_ANT_CACHE_AUTO, MESSAGE_FLAG_VND_ANT_CACHE_USER, messageHasUserFlag, messageSetUserFlag } from '~/common/stores/chat/chat.message';
 import { createTextContentFragment, DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
-import { gcChatImageAssets } from '~/common/stores/chat/chat.gc';
+import { collectFragmentAssetIds, gcChatImageAssets } from '~/common/stores/chat/chat.gc';
 import { getChatLLMId } from '~/common/stores/llms/store-llms';
 
 import { getChatAutoAI, getChatThinkingPolicy } from '../../apps/chat/store-app-chat';
@@ -159,7 +160,7 @@ export class ConversationHandler {
     _chatStoreActions.appendMessage(this.conversationId, message);
   }
 
-  messageEdit(messageId: string, update: Partial<DMessage> | ((message: DMessage) => Partial<DMessage>), messageComplete: boolean, touch: boolean) {
+  messageEdit(messageId: string, update: Partial<DMessage> | ((message: DMessage) => (Partial<DMessage> | false)), messageComplete: boolean, touch: boolean) {
     _chatStoreActions.editMessage(this.conversationId, messageId, update, messageComplete, touch);
   }
 
@@ -169,16 +170,41 @@ export class ConversationHandler {
     void gcChatImageAssets(); // fire/forget
   }
 
+  // per-fragment writes, for programmatic edits (also on pending messages); user edits go through messageFragmentsReplace
+
   messageFragmentAppend(messageId: string, fragment: DMessageFragment, complete: boolean, touch: boolean) {
-    _chatStoreActions.appendMessageFragment(this.conversationId, messageId, fragment, complete, touch);
+    this.messageEdit(messageId, message => ({ fragments: [...message.fragments, fragment] }), complete, touch);
   }
 
   messageFragmentDelete(messageId: string, fragmentId: string, complete: boolean, touch: boolean) {
-    _chatStoreActions.deleteMessageFragment(this.conversationId, messageId, fragmentId, complete, touch);
+    this.messageEdit(messageId, message => ({ fragments: message.fragments.filter(f => f.fId !== fragmentId) }), complete, touch);
   }
 
   messageFragmentReplace(messageId: string, fragmentId: string, newFragment: DMessageFragment, messageComplete: boolean) {
-    _chatStoreActions.replaceMessageFragment(this.conversationId, messageId, fragmentId, newFragment, messageComplete, true);
+    this.messageEdit(messageId, message => {
+      const fragmentIndex = message.fragments.findIndex(f => f.fId === fragmentId);
+      if (fragmentIndex < 0) {
+        console.error(`replaceFragment: fragment not found for ID ${fragmentId}`);
+        return false; // no write
+      }
+      // a new object, in case the contents changed but not the object reference
+      return { fragments: message.fragments.map((f, index) => index === fragmentIndex ? { ...newFragment } : f) };
+    }, messageComplete, true);
+  }
+
+  /** Replaces all the fragments in one write; nothing while the message is missing or generating. */
+  messageFragmentsReplace(messageId: DMessageId, fragments: DMessageFragment[]) {
+    const message = _chatStoreActions.historyView(this.conversationId)?.find(m => m.id === messageId);
+    if (!message || message.pendingIncomplete) return;
+    // removePendingState: a no-op past the guard above, and it marks the write final for persistence
+    _chatStoreActions.editMessage(this.conversationId, messageId, { fragments }, true, true);
+
+    // GC the images the replacement dropped
+    const keptIds = new Set<DBlobAssetId>(), priorIds = new Set<DBlobAssetId>();
+    collectFragmentAssetIds(fragments, keptIds);
+    collectFragmentAssetIds(message.fragments, priorIds);
+    if ([...priorIds].some(id => !keptIds.has(id)))
+      void gcChatImageAssets(); // fire/forget
   }
 
   messageHasUserFlag(messageId: DMessageId, userFlag: DMessageUserFlag): boolean {

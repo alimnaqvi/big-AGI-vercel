@@ -6,7 +6,7 @@ import type { ContentScaling } from '~/common/app.theme';
 import type { DMessageRole } from '~/common/stores/chat/chat.message';
 import { useRenderDecay } from '~/common/render-decay/RenderDecayZone';
 
-import { BLOCK_CODE_MERMAID_TITLE, BLOCK_CODE_PLANTUML_TITLE, BLOCK_CODE_SVG_TITLE, RenderCodeMemo } from './code/RenderCode';
+import { BLOCK_CODE_MERMAID_TITLE, BLOCK_CODE_PLANTUML_TITLE, BLOCK_CODE_SVG_TITLE, BLOCK_CODE_VND_AGI_CHARTJS, RenderCodeMemo } from './code/RenderCode';
 import { BlocksContainer } from './BlocksContainers';
 import { EnhancedRenderCodeMemo } from './enhanced-code/EnhancedRenderCode';
 import { RenderImageURL } from './image/RenderImageURL';
@@ -15,6 +15,7 @@ import { isTextChatCommand, RenderPlainText } from './plaintext/RenderPlainText'
 import { RenderWordsDiff, WordsDiff } from './wordsdiff/RenderWordsDiff';
 import { ToggleExpansionButton } from './ToggleExpansionButton';
 import { heuristicIsBlockPureHTML, RenderDangerousHtml } from './danger-html/RenderDangerousHtml';
+import { removeCodeBlockFromText } from './blocks.textparser';
 import { useAutoBlocksMemoSemiStable, useHeightCollapser } from './blocks.hooks';
 import { useScaledCodeSx, useScaledImageSx, useScaledTypographySx, useToggleExpansionButtonSx } from './blocks.styles';
 
@@ -27,8 +28,8 @@ const USER_CODE_COLLAPSED_LINES = 15; // longer code in user text starts collaps
 
 const _styles = {
   collapsible: {
-    // takes the grid slot of BlocksContainer: same width, and minWidth 0 so wide code scrolls inside instead of widening the grid
-    width: '100%',
+    // the grid slot of BlocksContainer: stretches or hugs with the grid; minWidth 0 so wide code scrolls inside instead of widening it
+    maxWidth: '100%',
     minWidth: 0,
   },
 } as const;
@@ -45,7 +46,7 @@ export type AutoBlocksHtmlRenderVariant = 'show-code' | 'render-at-end' | 'rende
 /**
  * Features: collapse/expand, auto-detects HTML, SVG, Code, etc..
  * Used by (and more):
- * - BlockPartText_AutoBlocks - the main text blocks in ChatMessage > ContentFragments > *
+ * - BlockPartText_AutoBlocks - the main text blocks in ChatMessage > CMRenderTreeNodes > *
  * - DocAttachmentFragmentPane - when not editing and with a switch to show text/fenced (which could be rendered)
  * - DiagramsModal - for the diagram blocks
  */
@@ -81,6 +82,8 @@ export function AutoBlocksRenderer(props: {
    * If defined, this will replace the Fragment text with the new one.
    */
   setText?: (newText: string) => void;
+  /** If defined, attaches the file in the owner. */
+  onReattachAsFile?: (file: File) => void;
 
 }) {
 
@@ -116,6 +119,8 @@ export function AutoBlocksRenderer(props: {
   // re-render completed non-last Code/Markdown blocks.
   const curTextRef = React.useRef(text);
   curTextRef.current = text;
+  const curBlocksRef = React.useRef(autoBlocksStable);
+  curBlocksRef.current = autoBlocksStable;
 
   const handleReplaceCode = React.useCallback((search: string, replace: string): boolean => {
     if (setText) {
@@ -128,6 +133,15 @@ export function AutoBlocksRenderer(props: {
     }
     return false;
   }, [setText]);
+
+  const handleDeleteContainingCodeBlock = React.useCallback((code: string, semiStableId: string | undefined) => {
+    if (!setText || props.inFlux || !semiStableId) return;
+    const block = curBlocksRef.current.find(block => block.bkId === semiStableId);
+    if (!block || block.bkt !== 'code-bk' || block.code !== code) return;
+    const newText = removeCodeBlockFromText(curTextRef.current, block);
+    if (newText !== null)
+      setText(newText);
+  }, [props.inFlux, setText]);
 
 
   // Memo the styles, to minimize re-renders
@@ -181,7 +195,7 @@ export function AutoBlocksRenderer(props: {
             // Keep the component type stable across fence closure, completion and resume.
             // Content controls the frame, while the renderer keeps its DOM, iframe and toggles.
             const lowerCaseTitle = bkInput.title.toLowerCase();
-            const isDiagram = lowerCaseTitle === BLOCK_CODE_MERMAID_TITLE || lowerCaseTitle === BLOCK_CODE_PLANTUML_TITLE;
+            const isDiagram = lowerCaseTitle === BLOCK_CODE_MERMAID_TITLE || lowerCaseTitle === BLOCK_CODE_PLANTUML_TITLE || lowerCaseTitle === BLOCK_CODE_VND_AGI_CHARTJS;
             const frameless = isDiagram
               ? !bkInput.isPartial // diagrams: framed and collapsed while written, bare once they render
               : (bkInput.isPartial && lastBlockInFlux) || (!bkInput.title && bkInput.lines <= 3) || lowerCaseTitle === BLOCK_CODE_SVG_TITLE;
@@ -203,6 +217,8 @@ export function AutoBlocksRenderer(props: {
                 initialRenderHTML={props.htmlRenderVariant === 'render' || (props.htmlRenderVariant === 'render-at-end' && !bkInput.isPartial)}
                 noCopyButton={props.blocksProcessor === 'diagram'}
                 optimizeLightweight={lastBlockInFlux}
+                onDeleteContainingCodeBlock={!setText || props.inFlux || bkInput.isPartial || bkInput.sourceStart === undefined ? undefined : handleDeleteContainingCodeBlock}
+                onReattachAsFile={props.onReattachAsFile}
                 onReplaceInCode={!setText ? undefined : handleReplaceCode}
                 codeSx={scaledCodeSx}
               />
@@ -215,6 +231,7 @@ export function AutoBlocksRenderer(props: {
                 initialRenderHTML={props.htmlRenderVariant === 'render' || (props.htmlRenderVariant === 'render-at-end' && !bkInput.isPartial)}
                 noCopyButton={props.blocksProcessor === 'diagram'}
                 optimizeLightweight={lastBlockInFlux}
+                onReattachAsFile={props.onReattachAsFile}
                 onReplaceInCode={!setText ? undefined : handleReplaceCode}
                 sx={scaledCodeSx}
               />

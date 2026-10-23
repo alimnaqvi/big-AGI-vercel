@@ -6,7 +6,7 @@ import type { DFolder } from '~/common/stores/folders/store-chat-folders';
 import { DMessage, DMessageUserFlag, MESSAGE_FLAG_STARRED, messageFragmentsReduceText, messageHasUserFlag, messageUserFlagToEmoji } from '~/common/stores/chat/chat.message';
 import { conversationTitle, DConversationId } from '~/common/stores/chat/chat.conversation';
 import { createTimeBucketClassifierEn } from '~/common/util/timeUtils';
-import { isAttachmentFragment, isContentOrAttachmentFragment, isDocPart, isImageRefPart, isZyncAssetImageReferencePart } from '~/common/stores/chat/chat.fragments';
+import { isAttachmentFragment, isContentOrAttachmentFragment, isDocPart, isImagePart } from '~/common/stores/chat/chat.fragments';
 import { shallowEquals } from '~/common/util/hooks/useShallowObject';
 import { useChatStore } from '~/common/stores/chat/store-chats';
 
@@ -49,7 +49,7 @@ function messageHasDocAttachmentFragments(message: DMessage): boolean {
 
 function messageHasImageFragments(message: DMessage): boolean {
   return message.fragments.some(fragment => isContentOrAttachmentFragment(fragment) && (
-    isZyncAssetImageReferencePart(fragment.part) || isImageRefPart(fragment.part)
+    isImagePart(fragment.part)
   ));
 }
 
@@ -96,6 +96,7 @@ export function useChatDrawerRenderItems(
   searchSorting: ChatSearchSorting,
   showRelativeSize: boolean,
   searchDepth: ChatSearchDepth,
+  queryIncludeArchived: boolean,
 ): ChatDrawerRenderItems {
 
   // state
@@ -116,9 +117,13 @@ export function useChatDrawerRenderItems(
 
   return useChatStore(({ conversations: convPreFilter }) => {
 
+      const { isSearching, lcTextQuery } = isDrawerSearching(filterByQuery);
+
       // filter 0: archival status
-      const conversations = filterIsArchived ? convPreFilter.filter(c => !!c.isArchived)
-        : convPreFilter.filter(c => !c.isArchived);
+      const conversations =
+        isSearching && queryIncludeArchived ? convPreFilter
+          : filterIsArchived ? convPreFilter.filter(c => !!c.isArchived)
+            : convPreFilter.filter(c => !c.isArchived);
 
       // filter 1: select all conversations or just the ones in the active folder
       const conversationsInFolder = !activeFolder ? conversations
@@ -128,9 +133,6 @@ export function useChatDrawerRenderItems(
       const ageCutoffMs = filterOlderThanDays === null ? null : Date.now() - filterOlderThanDays * 24 * 60 * 60 * 1000;
       const conversationsInAge = ageCutoffMs === null ? conversationsInFolder
         : conversationsInFolder.filter(_c => (_c.updated || _c.created || 0) < ageCutoffMs);
-
-      // filter 2: preparation: lowercase the query
-      const { isSearching, lcTextQuery } = isDrawerSearching(filterByQuery);
 
       // transform (the conversations into ChatNavigationItemData) + filter2 (if searching)
       const chatNavItems = conversationsInAge
