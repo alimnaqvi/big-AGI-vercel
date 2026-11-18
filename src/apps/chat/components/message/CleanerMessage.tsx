@@ -1,23 +1,22 @@
 import * as React from 'react';
 
-import { Box, Button, Checkbox, Chip, IconButton, ListItem, Sheet, Tooltip } from '@mui/joy';
+import { Box, Button, Checkbox, Chip, IconButton, ListItem, Sheet } from '@mui/joy';
 import AttachFileRoundedIcon from '@mui/icons-material/AttachFileRounded';
 import ClearIcon from '@mui/icons-material/Clear';
-import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
-import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ErrorIcon from '@mui/icons-material/ErrorRounded';
 import TextFieldsIcon from '@mui/icons-material/TextFieldsRounded';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 
-import { DMessage, MESSAGE_FLAG_AIX_SKIP, messageFragmentsReduceText, messageHasUserFlag, messageWasOutOfTokens } from '~/common/stores/chat/chat.message';
+import { DMessage, MESSAGE_FLAG_AIX_SKIP, messageFragmentsReduceText, messageHasUserFlag } from '~/common/stores/chat/chat.message';
+import { messageOutcome, messageOutcomeColor } from '~/common/stores/chat/chat.message.outcome';
 import { DMessageAttachmentFragment, DMessageFragment, isAttachmentFragment, isContentFragment, isImagePart, isImageRefPart, isZyncAssetImageReferencePart } from '~/common/stores/chat/chat.fragments';
+import { ConfirmIconButton } from '~/common/components/ConfirmIconButton';
 import { PhImageSquare } from '~/common/components/icons/phosphor/PhImageSquare';
 import { makeMessageAvatarIcon, messageBackground } from '~/common/util/dMessageUtils';
 
 import { TokenBadgeMemo } from '../composer/tokens/TokenBadge';
-import { isErrorChatMessage } from './explainServiceErrors';
 import { messageSkippedSx } from './ChatMessage';
 
 
@@ -74,6 +73,10 @@ function analyzeMessageFragments(messageFragments: ReadonlyArray<DMessageFragmen
         case 'tool_invocation':
         case 'tool_response':
           result.toolCount++;
+          break;
+        case 'hosted_resource':
+        case '_pt_sentinel':
+          // not counted
           break;
       }
     } else if (isAttachmentFragment(fragment)) {
@@ -184,9 +187,6 @@ export function CleanerMessage(props: {
   onToggleSelected?: (messageId: string, selected: boolean) => void,
 }) {
 
-  // state
-  const [deleteArmed, setDeleteArmed] = React.useState(false);
-
   // derived state
   const {
     id: messageId,
@@ -199,20 +199,8 @@ export function CleanerMessage(props: {
     updated: messageUpdated,
   } = props.message;
 
-  // delete handlers (arming pattern)
-  const handleDeleteArm = React.useCallback((event: React.MouseEvent) => {
-    event.stopPropagation();
-    setDeleteArmed(true);
-  }, []);
-
-  const handleDeleteCancel = React.useCallback((event: React.MouseEvent) => {
-    event.stopPropagation();
-    setDeleteArmed(false);
-  }, []);
-
-  const handleDeleteConfirm = React.useCallback((event: React.MouseEvent) => {
-    event.stopPropagation();
-    setDeleteArmed(false);
+  // delete handler (two-step)
+  const handleDeleteConfirm = React.useCallback(() => {
     props.onDeleteMessage?.(messageId);
   }, [messageId, props]);
 
@@ -228,15 +216,13 @@ export function CleanerMessage(props: {
 
   const isUserMessageSkipped = messageHasUserFlag(props.message, MESSAGE_FLAG_AIX_SKIP);
 
-  const isAssistantError = fromAssistant && isErrorChatMessage(messageText);
-  const isAssistantOutOfTokens = messageWasOutOfTokens(messageGenerator);
-
   const userCommandApprox = messageRole !== 'user' ? false
     : messageText.startsWith('/draw ') ? 'draw'
       : messageText.startsWith('/react ') ? 'react'
         : false;
 
-  const backgroundColor = messageBackground(messageRole, userCommandApprox, !!messageUpdated, isAssistantError, isAssistantOutOfTokens);
+  const outcomeColor = messageOutcomeColor(messageOutcome(props.message));
+  const backgroundColor = messageBackground(messageRole, userCommandApprox, !!messageUpdated, outcomeColor === 'danger' || outcomeColor === 'warning' ? outcomeColor : undefined /* the cleaner tints failures too, to pick them out */);
 
   const avatarIconEl: React.JSX.Element | null = React.useMemo(() => {
     return makeMessageAvatarIcon('pro', messageRole, messageGeneratorName, messagePurposeId, !!messagePendingIncomplete, isUserMessageSkipped, false, false);
@@ -327,21 +313,10 @@ export function CleanerMessage(props: {
 
       </Box>
 
-      {/* Delete button (desktop only, arming pattern) */}
+      {/* Delete button (desktop only, two-step) */}
       {!!props.onDeleteMessage && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 'auto' }}>
-          {deleteArmed && (
-            <Tooltip title='Confirm Delete' color='danger' arrow>
-              <IconButton aria-label='Confirm delete message' size='sm' variant='soft' color='danger' onClick={handleDeleteConfirm}>
-                <DeleteForeverIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          <Tooltip title={deleteArmed ? 'Cancel' : 'Delete'} arrow>
-            <IconButton aria-label={deleteArmed ? 'Cancel delete message' : 'Delete message'} size='sm' variant='plain' color={deleteArmed ? 'neutral' : 'danger'} onClick={deleteArmed ? handleDeleteCancel : handleDeleteArm}>
-              {deleteArmed ? <CloseRoundedIcon /> : <DeleteOutlineIcon />}
-            </IconButton>
-          </Tooltip>
+        <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>
+          <ConfirmIconButton color='danger' side='start' tooltip='Delete' onConfirm={handleDeleteConfirm} />
         </Box>
       )}
     </ListItem>

@@ -65,9 +65,12 @@ let nextConfig: NextConfig = {
   serverExternalPackages: ['puppeteer-core'],
 
   // WEBPACK ONLY: turbopack skips this hook (client mocks, wasm) - never run --turbopack
-  webpack: (config: any, { isServer, dev, webpack /*, nextRuntime*/ }: WebpackConfigContext) => {
+  webpack: (config: any, { isServer, dev, webpack, nextRuntime }: WebpackConfigContext) => {
     // @mui/joy: anything material gets redirected to Joy
     config.resolve.alias['@mui/material'] = '@mui/joy';
+
+    // posthog-node: skip the optional peer of its email API (unused here), or the server bundles warn "Can't resolve '@react-email/render'"
+    config.plugins.push(new webpack.IgnorePlugin({ resourceRegExp: /^@react-email\/render$/, contextRegExp: /posthog-node/ }));
 
     // @dqbd/tiktoken: enable asynchronous WebAssembly
     config.experiments = {
@@ -109,6 +112,23 @@ let nextConfig: NextConfig = {
 
       // cosmetic: fix warnings for (absent!) top-level awaits in the browser (https://github.com/vercel/next.js/issues/64792)
       config.output.environment = { ...config.output.environment, asyncFunction: true };
+    }
+
+    // server-side bundling, `next dev` only: the single-tab gate (ProviderSingleTab) renders a placeholder on the server, which never
+    // renders the chat app or the Optima layout - compile their server mocks instead of ~1k modules. Builds keep the real modules.
+    if (isServer && dev && nextRuntime === 'nodejs') {
+      const clientToServerMocks: ReadonlyArray<[RegExp, string]> = [
+        [/\/AppChat$/, '/AppChat.server-mock'],
+        [/\/OptimaLayout$/, '/OptimaLayout.server-mock'],
+      ];
+      config.plugins = [
+        ...config.plugins,
+        ...clientToServerMocks.map(([pattern, replacement]) =>
+          new webpack.NormalModuleReplacementPlugin(pattern, (resource: any) => {
+            resource.request = resource.request.replace(pattern, replacement);
+          }),
+        ),
+      ];
     }
 
     // prevent too many small chunks (40kb min) on 'client' packs (not 'server' or 'edge-server')
@@ -185,13 +205,14 @@ if (process.env.POSTHOG_API_KEY && process.env.POSTHOG_ENV_ID) {
   log('- building with PostHog issue reporting...');
   nextConfig = withPostHogConfig(nextConfig, {
     personalApiKey: process.env.POSTHOG_API_KEY,
-    envId: process.env.POSTHOG_ENV_ID,
+    projectId: process.env.POSTHOG_ENV_ID,
     host: 'https://us.i.posthog.com', // backtrace upload host
     logLevel: 'error', // lowered, too noisy
     sourcemaps: {
       enabled: process.env.NODE_ENV === 'production',
-      project: 'big-agi',
-      version: process.env.NEXT_PUBLIC_BUILD_HASH,
+      failOnError: process.env.VERCEL_ENV === 'preview', // a failed upload stops preview builds only: they surface it, no other build depends on PostHog
+      releaseName: 'big-agi',
+      releaseVersion: process.env.NEXT_PUBLIC_BUILD_HASH,
       deleteAfterUpload: false, // false: leave them in the tree, which would also help debugging of open-source installs
     },
   });

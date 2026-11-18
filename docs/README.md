@@ -2,6 +2,8 @@
 
 Information you need to get started, configure, and use big-AGI productively.
 
+> **The current user documentation is at [big-agi.com/docs](https://big-agi.com/docs)**, also readable inside the app (Documentation). Pages in this folder can be out of date; they remain for self-hosting and deployment material not yet covered there.
+
 👉 **[Changelog](https://big-agi.com/changes)** - See what's new
 
 ## Getting Started
@@ -64,7 +66,7 @@ For deploying a custom big-AGI instance:
 
 - **Advanced Setup**:
   - **[Source Code Customization](customizations.md)**: Modify the source code
-  - **[Access Control](deploy-authentication.md)**: Optional, add basic user authentication
+  - **[Access Control](https://big-agi.com/docs/self-host-configuration#keys-and-access-control)**: Optional, authentication in front of the app or HTTP Basic Auth in your build
   - **[Reverse Proxy](deploy-reverse-proxy.md)**: Optional, enables custom domains and SSL
   - **[Docker Deployment](deploy-docker.md)**: Deploy with Docker containers
   - **[Kubernetes](deploy-k8s.md)**: Deploy on Kubernetes clusters

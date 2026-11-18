@@ -19,12 +19,13 @@ export const Release = {
     BACKEND_REVALIDATE_INTERVAL: 6 * 60 * 60 * 1000, // 6 hours
     // DISABLE_PRECISE_TOKENIZER: false, // future optimization: disables the correct tokenizer fully or over a certain input size (e.g. 1k)
     LIGHTER_ANIMATIONS: false, // optimization: disables some animations for performance
+    ERROR_REPORTING: true, // default: true - client errors, caught and uncaught, are reported where PostHog is configured; false sends none, analytics events still flow
   },
 
   // this is here to trigger revalidation of data, e.g. models refresh
   Monotonics: {
     Aix: 92,
-    NewsVersion: 210,
+    NewsVersion: 213,
   },
 
   // Frontend: pretty features
@@ -68,6 +69,5 @@ export const BaseProduct = {
   NewsSite: 'https://big-agi.com/changes',
   OpenSupportDiscord: 'https://discord.gg/MkH4qj2Jp9',
   OpenSourceRepo: 'https://github.com/enricoros/big-agi',
-  ReleaseNotes: '',
   SupportForm: (_userId?: string) => 'https://github.com/enricoros/big-AGI/issues/new?template=ai-triage.yml',
 } as const;

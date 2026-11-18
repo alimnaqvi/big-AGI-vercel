@@ -34,7 +34,8 @@ const _antEffortOptions = [
 ] as const;
 
 const _gemEffortOptions = [
-  { value: 'high', label: 'High', description: 'Maximum reasoning depth' } as const,
+  { value: 'xhigh', label: 'X-High', description: 'Deepest reasoning' } as const,
+  { value: 'high', label: 'High', description: 'Deep reasoning' } as const,
   { value: 'medium', label: 'Medium', description: 'Balanced reasoning' } as const,
   { value: 'low', label: 'Low', description: 'Quick responses' } as const,
   { value: 'minimal', label: 'Minimal', description: 'Fastest, least reasoning' } as const,
@@ -291,7 +292,6 @@ export function LLMParametersEditor(props: {
     llmResponseTokens = LLMImplicitParametersRuntimeFallback.llmResponseTokens, // fallback for undefined, result is number | null
     llmTemperature, // null: no temperature, number: temperature value, undefined: shall not happen, we treat is similarly to null
     llmForceNoStream,
-    llmVndAnt1MContext,
     llmVndAntCodeSandbox,
     llmVndAntEffort,
     llmVndAntInfSpeed,
@@ -499,7 +499,7 @@ export function LLMParametersEditor(props: {
     {showParam('llmVndGemEffort') && gemEffortOptions && (
       <FormSelectControl
         title='Thinking Level'
-        tooltip='Controls internal reasoning depth. When unset, the model decides dynamically.'
+        tooltip='Controls internal reasoning depth. When unset, uses the model default.'
         value={llmVndGemEffort ?? _UNSPECIFIED}
         onChange={(value) => {
           if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGemEffort');
@@ -674,19 +674,6 @@ export function LLMParametersEditor(props: {
 
     {showParam('llmVndAntSkills') && (
       <AnthropicSkillsConfig llmVndAntSkills={llmVndAntSkills} onChangeParameter={onChangeParameter} onRemoveParameter={onRemoveParameter} />
-    )}
-
-    {showParam('llmVndAnt1MContext') && (
-      <FormSwitchControl
-        title='1M Context Window (Beta)'
-        description='Enable 1M token context'
-        tooltip='Enables the 1M token context window with premium pricing for &gt;200K input tokens. - https://docs.claude.com/en/docs/build-with-claude/context-windows#1m-token-context-window'
-        checked={!!llmVndAnt1MContext}
-        onChange={checked => {
-          if (!checked) onRemoveParameter('llmVndAnt1MContext');
-          else onChangeParameter({ llmVndAnt1MContext: true });
-        }}
-      />
     )}
 
     {/* Anthropic Fast Mode - currently hidden via parameterSpec.hidden */}

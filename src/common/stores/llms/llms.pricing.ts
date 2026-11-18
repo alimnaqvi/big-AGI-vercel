@@ -67,7 +67,7 @@ function _isPricingFree(pricing: DTieredPricing | undefined): boolean {
 /// Human readable cost
 
 export function getLlmCostForTokens(tierTokens: number, tokens: number, pricing: DTieredPricing | undefined): number | undefined {
-  if (!pricing) return undefined;
+  if (pricing === undefined || pricing === null) return undefined; // 0 is a price (free), not a missing one
   if (pricing === 'free') return 0;
 
   // Cost = tokens * price / 1e6
@@ -98,7 +98,7 @@ export function getLlmCostForTokens(tierTokens: number, tokens: number, pricing:
  *
  * Note: does NOT affect isLLMChatFree_cached (free * N = free). Per-call tool fees are not multiplied.
  */
-export function llmChatPricing_adjusted(llm: DLLM | null, confirmedMultiplier?: number): DPricingChatGenerate | undefined {
+export function llmChatPricing_adjusted<TLlm extends Pick<DLLM, 'pricing' | 'userPricing' | 'parameterSpecs' | 'initialParameters' | 'userParameters'>>(llm: TLlm | null, confirmedMultiplier?: number): DPricingChatGenerate | undefined {
   if (!llm) return undefined;
 
   // base chat pricing

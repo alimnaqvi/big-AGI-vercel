@@ -13,6 +13,8 @@ import { z } from 'zod';
 
 import { modelPickOrAuto } from '~/common/util/modelPickUtils';
 
+import { llmsApiUrl } from '~/modules/llms/shared/llm.isomorphic';
+
 import type { ASRxAccess_Deepgram } from './batch.access';
 import type { ASRxCoreTranscribeResult, TranscribeBackendFn } from './transcribe.core';
 import type { ASRxDetectedTopic } from '../../asrx.types';
@@ -97,6 +99,8 @@ export const transcribeDeepgram: TranscribeBackendFn<ASRxAccess_Deepgram> = asyn
 
   if (profile.smartFormat !== undefined) queryParams.set('smart_format', String(profile.smartFormat));
   if (profile.diarize !== undefined) queryParams.set('diarize', String(profile.diarize));
+  // speaker labels exist only in the paragraphs transcript, which smart_format otherwise brings
+  if (profile.diarize) queryParams.set('paragraphs', 'true');
   if (profile.utterances !== undefined) queryParams.set('utterances', String(profile.utterances));
   if (profile.topics) queryParams.set('topics', 'true');
   if (profile.sentiment) queryParams.set('sentiment', 'true');
@@ -108,7 +112,7 @@ export const transcribeDeepgram: TranscribeBackendFn<ASRxAccess_Deepgram> = asyn
     for (const term of keyterms) queryParams.append(termParam, term);
   }
 
-  const url = `${host}/v1/listen?${queryParams.toString()}`;
+  const url = llmsApiUrl(host, `/v1/listen?${queryParams.toString()}`);
 
   // Auth & content headers
   if (!access.apiKey) throw new Error('Missing Deepgram API key');

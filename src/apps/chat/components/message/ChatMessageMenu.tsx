@@ -5,8 +5,6 @@ import { Box, CircularProgress, IconButton, ListDivider, ListItem, ListItemDecor
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditRoundedIcon from '@mui/icons-material/EditRounded';
 import ForkRightIcon from '@mui/icons-material/ForkRight';
 import FormatPaintOutlinedIcon from '@mui/icons-material/FormatPaintOutlined';
@@ -25,13 +23,15 @@ import { ModelVendorAnthropic } from '~/modules/llms/vendors/anthropic/anthropic
 import type { DLLMId } from '~/common/stores/llms/llms.types';
 import { AnthropicIcon } from '~/common/components/icons/vendors/AnthropicIcon';
 import { ChatBeamIcon } from '~/common/components/icons/ChatBeamIcon';
-import { CloseablePopup, joyKeepPopup } from '~/common/components/CloseablePopup';
+import { CloseablePopup } from '~/common/components/CloseablePopup';
+import { ConfirmMenuItem } from '~/common/components/ConfirmMenuItem';
 import { SubMenuHost, SubMenuItem, useSubMenuHost } from '~/common/components/SubMenu';
-import { DMessageUserFlag, MESSAGE_FLAG_AIX_SKIP, MESSAGE_FLAG_NOTIFY_COMPLETE, MESSAGE_FLAG_STARRED, MESSAGE_FLAG_VND_ANT_CACHE_USER } from '~/common/stores/chat/chat.message';
+import { DMessagePresentation, DMessageUserFlag, MESSAGE_FLAG_AIX_SKIP, MESSAGE_FLAG_NOTIFY_COMPLETE, MESSAGE_FLAG_STARRED, MESSAGE_FLAG_VND_ANT_CACHE_USER } from '~/common/stores/chat/chat.message';
 import { KeyStroke } from '~/common/components/KeyStroke';
 import { PhGearSixIcon } from '~/common/components/icons/phosphor/PhGearSixIcon';
 import { PhTreeStructure } from '~/common/components/icons/phosphor/PhTreeStructure';
 import { PhVoice } from '~/common/components/icons/phosphor/PhVoice';
+import { Release } from '~/common/app.release';
 import { StarredState } from '~/common/components/StarIcons';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { optimaOpenPreferences } from '~/common/layout/optima/useOptima';
@@ -71,6 +71,7 @@ export function ChatMessageMenu(props: {
   userNotifyCompleteLlmId: DLLMId | null,
   isUserStarred: boolean,
   isViewMarkdown: boolean,
+  isViewUngrouped: boolean,
   isVndAndCacheAuto: boolean,
   isVndAndCacheUser: boolean,
   showVndAntCaching: boolean,
@@ -83,8 +84,8 @@ export function ChatMessageMenu(props: {
   onOpsBranchFrom?: (event: React.MouseEvent) => void,
   onOpsMessageCopySrc?: (event: React.MouseEvent) => void,
   onOpsMessageEditToggle?: (event: React.MouseEvent) => void,
+  onOpsMessagePresentationChange?: (event: React.MouseEvent, update: Partial<DMessagePresentation> | null) => void,
   onOpsMessageTruncate?: (event: React.MouseEvent) => void,
-  onOpsMessageViewToggle?: (event: React.MouseEvent) => void,
   onOpsShowInfo?: () => void,
   // onOpsTextChart?: (event: React.MouseEvent) => void,
   onOpsTextDiagram?: (event: React.MouseEvent) => void,
@@ -98,7 +99,6 @@ export function ChatMessageMenu(props: {
   const subMenuHost = useSubMenuHost();
 
   // state
-  const [armedAction, setArmedAction] = React.useState<'delete' | 'truncate' | null>(null);
   // const [showDiff, setShowDiff] = useChatShowTextDiff();
   // const handleOpsToggleShowDiff = () => setShowDiff(!showDiff);
 
@@ -115,8 +115,8 @@ export function ChatMessageMenu(props: {
     onOpsBranchFrom,
     onOpsMessageCopySrc,
     onOpsMessageEditToggle,
+    onOpsMessagePresentationChange,
     onOpsMessageTruncate,
-    onOpsMessageViewToggle,
     onOpsShowInfo,
     onOpsTextDiagram,
     onOpsTextImagine,
@@ -125,28 +125,12 @@ export function ChatMessageMenu(props: {
   } = props;
 
 
-  // [effect] confirmations expire; closing the menu unmounts it and clears the timer
-  React.useEffect(() => {
-    if (!armedAction) return;
-    const timer = setTimeout(() => setArmedAction(null), 5000);
-    return () => clearTimeout(timer);
-  }, [armedAction]);
-
-
   // handlers
 
   const handleDeleteConfirmed = React.useCallback((event: React.MouseEvent) => {
-    if (armedAction !== 'delete') return;
-    setArmedAction(null);
     onClose();
     onMessageDelete?.(event);
-  }, [armedAction, onClose, onMessageDelete]);
-
-  const handleTruncateConfirmed = React.useCallback((event: React.MouseEvent) => {
-    if (armedAction !== 'truncate' || props.isBottom) return;
-    setArmedAction(null);
-    onOpsMessageTruncate?.(event);
-  }, [armedAction, onOpsMessageTruncate, props.isBottom]);
+  }, [onClose, onMessageDelete]);
 
   const handleShowInfo = React.useCallback(() => {
     onClose();
@@ -259,36 +243,24 @@ export function ChatMessageMenu(props: {
         </SubMenuItem>
       )}
       {onMessageDelete && (
-        <MenuItem onClick={joyKeepPopup(() => setArmedAction(action => action === 'delete' ? null : 'delete'))}>
-          <ListItemDecorator>{armedAction === 'delete' ? <CloseRoundedIcon /> : <DeleteOutlineIcon />}</ListItemDecorator>
-          {armedAction === 'delete' ? 'Cancel Delete' : <>Delete <span style={{ opacity: 0.5 }}>message</span></>}
-        </MenuItem>
-      )}
-      {onMessageDelete && armedAction === 'delete' && (
-        <MenuItem color='danger' onClick={handleDeleteConfirmed}>
-          <ListItemDecorator><DeleteForeverIcon /></ListItemDecorator>
-          Confirm Delete
-        </MenuItem>
+        <ConfirmMenuItem label={<>Delete <span style={{ opacity: 0.5 }}>message</span></>} confirmLabel='Confirm Delete' onConfirm={handleDeleteConfirmed} />
       )}
       {onOpsMessageTruncate && (
-        <MenuItem onClick={joyKeepPopup(() => setArmedAction(action => action === 'truncate' ? null : 'truncate'))} disabled={props.isBottom}>
-          <ListItemDecorator>{armedAction === 'truncate' ? <CloseRoundedIcon /> : <VerticalAlignBottomIcon />}</ListItemDecorator>
-          {armedAction === 'truncate' ? 'Cancel Truncate' : <>Truncate <span style={{ opacity: 0.5 }}>after this</span></>}
-        </MenuItem>
-      )}
-      {onOpsMessageTruncate && armedAction === 'truncate' && (
-        <MenuItem color='danger' onClick={handleTruncateConfirmed} disabled={props.isBottom}>
-          <ListItemDecorator><VerticalAlignBottomIcon /></ListItemDecorator>
-          Confirm Truncate
-        </MenuItem>
+        <ConfirmMenuItem icon={VerticalAlignBottomIcon} label={<>Truncate <span style={{ opacity: 0.5 }}>after this</span></>} confirmLabel='Confirm Truncate' disabled={props.isBottom} onConfirm={onOpsMessageTruncate} />
       )}
 
       {!pending && <ListDivider />}
-      {/* User text: markdown or plain text, for this message only (not saved) */}
-      {!pending && onOpsMessageViewToggle && (
-        <MenuItem onClick={onOpsMessageViewToggle}>
+      {/* Saved presentation of this message */}
+      {!pending && onOpsMessagePresentationChange && (
+        <MenuItem onClick={event => onOpsMessagePresentationChange(event, { textMode: props.isViewMarkdown ? 'plain' : 'markdown' })}>
           <ListItemDecorator><TextFieldsIcon /></ListItemDecorator>
           {props.isViewMarkdown ? 'View as text' : 'View as markdown'}
+        </MenuItem>
+      )}
+      {Release.IsNodeDevBuild && !pending && onOpsMessagePresentationChange && (
+        <MenuItem onClick={event => onOpsMessagePresentationChange(event, { fragmentGrouping: props.isViewUngrouped ? 'grouped' : 'ungrouped' })}>
+          <ListItemDecorator><PhTreeStructure /></ListItemDecorator>
+          {props.isViewUngrouped ? 'Group fragments' : 'Ungroup fragments'}
         </MenuItem>
       )}
       {/* Aix Skip Message */}

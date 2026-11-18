@@ -3,7 +3,7 @@
  */
 
 import { aixChatGenerateText_Simple } from '~/modules/aix/client/aix.client';
-import { bareBonesPromptMixer } from '~/modules/persona/pmix/pmix';
+import { promptMixer } from '~/modules/promptMixer/promptMixer';
 import { callApiSearchGoogle } from '~/modules/google/search.client';
 import { callBrowseFetchPageOrThrow } from '~/modules/browse/browse.client';
 
@@ -110,7 +110,7 @@ export class Agent {
   }
 
   initialize(question: string, assistantLLMId: DLLMId, enableBrowse: boolean, log: (...data: any[]) => void = console.log): State {
-    const systemPrompt = bareBonesPromptMixer(reActPrompt(enableBrowse), assistantLLMId);
+    const systemPrompt = promptMixer.oneShot(reActPrompt(enableBrowse));
     log('## Prepare Buffer');
     log('→ instruction [' + 1 + ']: "' + systemPrompt.slice(0, 86).replaceAll('\n', ' ') + ' ..."');
     return {
@@ -180,7 +180,8 @@ async function wikipedia(q: string): Promise<string> {
     `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&format=json&origin=*`,
   );
   const data = await response.json();
-  return data.query.search[0].snippet;
+  // no hits is an observation for the model, not a reason to fail the whole run
+  return data?.query?.search?.[0]?.snippet ?? 'No results found on Wikipedia.';
 }
 
 async function search(query: string): Promise<string> {

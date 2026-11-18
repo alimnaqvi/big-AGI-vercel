@@ -15,7 +15,7 @@ import { heartbeatsWhileAwaiting } from '~/modules/aix/server/dispatch/heartbeat
 import { wireLocalAIModelsApplyOutputSchema, wireLocalAIModelsAvailableOutputSchema, wireLocalAIModelsListOutputSchema } from './wiretypes/localai.wiretypes';
 import { WireOpenRouterCreateImagesRequest, wireOpenRouterCreateImagesResponseSchema } from './wiretypes/openrouter.wiretypes';
 
-import { ListModelsResponse_schema, ModelDescriptionSchema } from '../llm.server.types';
+import { type ListModelsResponse, ListModelsResponse_schema, UpstreamResourceId_schema } from '../llm.server.types';
 import { listModelsRunDispatch } from '../listModels.dispatch';
 
 import { OPENAI_API_PATHS, openAIAccess, openAIAccessSchema, OpenAIAccessSchema, OPENROUTER_API_PATHS } from './openai.access';
@@ -39,7 +39,7 @@ const createImageConfigGI = _createImageConfigBase.extend({
   model: OpenAIWire_API_Images_Generations.GptImageModels_schema,
   prompt: z.string().max(32000),
   size: z.enum([/*'auto',*/ '1024x1024', '1536x1024', '1024x1536']),
-  quality: z.enum(['max', 'xhigh', 'high', 'medium', 'low']).optional(), // 'max'/'xhigh': gpt-image-2.5 only - the client clamps
+  quality: z.enum(['max', 'xhigh', 'high', 'medium', 'low']).optional(), // 'max'/'xhigh': gpt-image-2.5 and 2.6 only - the client clamps
   background: z.enum(['auto', 'transparent', 'opaque']).optional(),
   output_format: z.enum(['png', 'jpeg', 'webp']).optional(),
   output_compression: z.number().min(0).max(100).int().optional(),
@@ -130,11 +130,9 @@ export const llmOpenAIRouter = createTRPCRouter({
       return result;
     })
 
-    .query(async ({ input: { access }, signal }): Promise<{ models: ModelDescriptionSchema[] }> => {
+    .query(async ({ input: { access }, signal }): Promise<ListModelsResponse> => {
 
-      const models = await listModelsRunDispatch(access, signal);
-
-      return { models };
+      return await listModelsRunDispatch(access, signal);
     }),
 
 
@@ -142,8 +140,8 @@ export const llmOpenAIRouter = createTRPCRouter({
   containerFileDownload: edgeProcedure
     .input(z.object({
       access: openAIAccessSchema,
-      containerId: z.string(),
-      fileId: z.string(),
+      containerId: UpstreamResourceId_schema,
+      fileId: UpstreamResourceId_schema,
     }))
     .query(async ({ input: { access, containerId, fileId } }) => {
       const { headers, url } = openAIAccess(access, null, `/v1/containers/${containerId}/files/${fileId}/content`);
@@ -169,8 +167,8 @@ export const llmOpenAIRouter = createTRPCRouter({
   containerFileDelete: edgeProcedure
     .input(z.object({
       access: openAIAccessSchema,
-      containerId: z.string(),
-      fileId: z.string(),
+      containerId: UpstreamResourceId_schema,
+      fileId: UpstreamResourceId_schema,
     }))
     .mutation(async ({ input: { access, containerId, fileId } }) => {
       const { headers, url } = openAIAccess(access, null, `/v1/containers/${containerId}/files/${fileId}`);
@@ -195,10 +193,11 @@ export const llmOpenAIRouter = createTRPCRouter({
 
       // Determine if this is an edit request (any member of the GPT Image family supports edits)
       const isGptImageFamily = _isGptImageConfig(config);
-      const isEdit = !!editConfig?.inputImages?.length && isGptImageFamily;
+      const hasInputImages = !!editConfig?.inputImages?.length;
+      const isEdit = hasInputImages && isGptImageFamily;
 
       // validate input
-      if (isEdit && !isGptImageFamily)
+      if (hasInputImages && !isGptImageFamily)
         throw new TRPCError({ code: 'BAD_REQUEST', message: `Image editing is only supported for GPT Image models` });
 
 

@@ -60,7 +60,7 @@
 import { describe, test } from 'node:test';
 
 import type { AixAPI_Access } from '../../aix/server/api/aix.wiretypes';
-import type { ModelDescriptionSchema } from './llm.server.types';
+import type { ListModelsResponse, ModelDescriptionSchema } from './llm.server.types';
 
 import { listModelsRunDispatch } from './listModels.dispatch';
 import { llmsIsLabelUncurated } from './models.mappings';
@@ -135,7 +135,7 @@ async function _runCapturingDevWarnings<T>(fn: () => Promise<T>): Promise<{ resu
 }
 
 async function expectOk(access: AixAPI_Access, minModels: number, label: string): Promise<ModelDescriptionSchema[]> {
-  const { result: models, devMessages } = await _runCapturingDevWarnings(() =>
+  const { result: { models }, devMessages } = await _runCapturingDevWarnings(() =>
     listModelsRunDispatch(access, AbortSignal.timeout(REQUEST_TIMEOUT_MS)),
   );
   ok(Array.isArray(models), `${label}: models is array`);
@@ -349,9 +349,21 @@ describe('listModels enumeration', () => {
     ok(models.some(m => /minimax/i.test(m.id)), 'minimax: MiniMax-* present');
   });
 
-  test('openai-compat/openrouter: live listing (endpoint is PUBLIC; any bearer accepted)', { skip: skipIfMissing('OPENROUTER_API_KEY') }, async () => {
-    // OpenRouter's /api/v1/models accepts any bearer token, so this COULD run keyless -
-    // but it's key-gated so a keyless `npm test` stays offline and deterministic (catalog
+  test('openai-compat/openai via sarvam /v2 host: versioned base URL, models described by the listing', { skip: skipIfMissing('SARVAM_API_KEY') }, async () => {
+    // The host ends in its API version, so the list is at /v2/models (no /v1 after it). The list is PUBLIC; key-gated to stay offline.
+    const models = await expectOk(
+      { dialect: 'openai', ...openAIShape({ oaiKey: E.SARVAM_API_KEY || '', oaiHost: 'https://api.sarvam.ai/v2' }) } as AixAPI_Access,
+      2, 'openai/sarvam',
+    );
+    ok(!models.some(m => llmsIsLabelUncurated(m.label)), 'sarvam: every label comes from the listing');
+    // per Sarvam's reasoning table: sarvam-105b thinks by default and takes reasoning_effort 'none'
+    const effort = models.find(m => m.id === 'sarvam-105b')?.parameterSpecs?.find(spec => spec.paramId === 'llmVndOaiEffort');
+    ok(effort?.enumValues?.includes('none'), 'sarvam-105b: thinking can be turned off');
+  });
+
+  test('openai-compat/openrouter: live listing (the list is PUBLIC; the key is checked beside it)', { skip: skipIfMissing('OPENROUTER_API_KEY') }, async () => {
+    // OpenRouter's /api/v1/models accepts any bearer token; the listing also asks /api/v1/key,
+    // so it needs a real key. Key-gated so a keyless `npm test` stays offline and deterministic (catalog
     // drift turns it red with zero code changes). Exercises a real fetch + OpenAI-compatible
     // parse + vendor mapping + variant injection pipeline.
     const key = E.OPENROUTER_API_KEY?.trim() || 'x';
@@ -360,6 +372,62 @@ describe('listModels enumeration', () => {
       50, 'openrouter/live',
     );
     ok(models.some(m => m.id.includes('/')), 'openrouter: ids use vendor/model format');
+  });
+
+  test('openai-compat/openrouter: a key OpenRouter does not know fails the listing', { skip: skipIfMissing('OPENROUTER_API_KEY') }, async () => {
+    // the public list loads for this key too: /api/v1/key's 401 is what fails the listing, at setup instead of at the first chat.
+    // Needs no key of ours; gated like the live listing, to stay offline without one.
+    const unknownKey = 'sk-or-v1-' + '0'.repeat(64);
+    const rejection: any = await listModelsRunDispatch(
+      { dialect: 'openrouter', ...openAIShape({ oaiKey: unknownKey }) } as AixAPI_Access, AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    ).then(() => null, error => error);
+    ok(rejection?.httpStatus === 401, 'openrouter: an unknown key throws the upstream 401');
+  });
+
+  // we hold no key that cannot pay: the live answers of /api/v1/key and /api/v1/credits pass through with the fields under
+  // test replaced, the list and everything else stay live
+  async function listOpenRouterAs(keyData: object, credits: object): Promise<ListModelsResponse> {
+    const liveFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const response = await liveFetch(input, init);
+      const replaced = String(input).endsWith('/v1/key') ? keyData : String(input).endsWith('/v1/credits') ? credits : null;
+      if (!replaced) return response;
+      const answer = await response.json();
+      return Response.json({ ...answer, data: { ...answer.data, ...replaced } }, { status: response.status });
+    };
+    try {
+      return await listModelsRunDispatch({ dialect: 'openrouter', ...openAIShape({ oaiKey: E.OPENROUTER_API_KEY?.trim() }) } as AixAPI_Access, AbortSignal.timeout(REQUEST_TIMEOUT_MS));
+    } finally {
+      globalThis.fetch = liveFetch;
+    }
+  }
+  const isFree = (m: ModelDescriptionSchema) => m.chatPrice?.input === 'free' && m.chatPrice.output === 'free';
+  const neverBought = { is_free_tier: true, limit: null, byok_usage: 0 }, noCredits = { total_credits: 0, total_usage: 0 };
+
+  test('openai-compat/openrouter: a key that cannot pay lists the priced models hidden, the free ones as usual', { skip: skipIfMissing('OPENROUTER_API_KEY') }, async () => {
+    for (const [why, keyData, credits, freeModelsOnly] of [
+      ['never bought credits', neverBought, noCredits, 'free-tier'],
+      ['a key limit of zero, on an account with credits', { is_free_tier: false, limit: 0, byok_usage: 0 }, { total_credits: 50, total_usage: 0 }, 'key-limit-zero'],
+    ] as const) {
+      const { models, accessStatus } = await listOpenRouterAs({ ...keyData, free_model_daily_requests: { limit: 50 } }, credits);
+      ok(accessStatus?.freeModelsOnly === freeModelsOnly && accessStatus.freeRequestsPerDay === 50, `openrouter (${why}): the access status says why, and what the free models allow`);
+      ok(models.some(m => !isFree(m)), `openrouter (${why}): the priced models are still listed`);
+      ok(models.every(m => isFree(m) || m.hidden), `openrouter (${why}): every priced model is hidden`);
+      ok(models.some(m => m.id === 'openrouter/free' && !m.hidden), `openrouter (${why}): the free router is listed, visible`);
+    }
+  });
+
+  test('openai-compat/openrouter: a key that never bought credits but shows access lists as usual', { skip: skipIfMissing('OPENROUTER_API_KEY') }, async () => {
+    for (const [why, keyData, credits] of [
+      ['a granted balance', neverBought, { total_credits: 5, total_usage: 1 }],
+      ['usage through its own provider keys', { ...neverBought, byok_usage: 0.5 }, noCredits],
+      ['a limit that is used up, on an account with credits', { is_free_tier: false, limit: 5, limit_remaining: 0, byok_usage: 0 }, noCredits],
+      ['a key answer of another shape', { is_free_tier: 'yes', limit: 'none', byok_usage: null }, noCredits],
+    ] as const) {
+      const { models, accessStatus } = await listOpenRouterAs(keyData, credits);
+      ok(models.some(m => !isFree(m) && !m.hidden), `openrouter (${why}): priced models are visible`);
+      ok(!accessStatus, `openrouter (${why}): no access status`);
+    }
   });
 
   test('openai-compat/perplexity: hardcoded list (no API, no credentials)', async () => {

@@ -13,12 +13,10 @@
 // [Bedrock, 2026-08-17] Live-verified in us-east-1 with a long-term Bearer key (all three listings 200):
 // 65 on-demand foundation models, 69 SYSTEM_DEFINED inference profiles, 55 Mantle ids.
 // - Anthropic coverage is complete: every served 'anthropic.*' id resolves through llmBedrockFindAnthropicModel
-//   (fable-5, opus-5/4-8/4-7/4-6, sonnet-5/4-6, opus-4-5, sonnet-4-5, haiku-4-5, opus-4-1, sonnet-4, haiku-3).
-//   The one exception is claude-3-sonnet-20240229 (0-day path, hidden). Mythos 5 is not listed (AWS card: Mantle Messages only, not wired).
-//   [2026-09-01] +fable-5-1 (foundation model + us./global. profiles, ACTIVE; invoke 403 on this account). Mythos 5.1 not listed (AWS card: gated preview).
-//   [2026-10-07] +haiku-5-5 beside opus-5-5 / sonnet-5-5 (foundation model + us./global. profiles, ACTIVE; haiku-5-5 invoke
-//   'not available for this account').
-// - Mantle also lists 6 undated 'anthropic.*' aliases, but they answer NEITHER OpenAI route ("does not support
+//   (fable-5-2/5-1/5, opus-5-5/5/4-8/4-7/4-6/4-5, sonnet-5-5/5/4-6/4-5, haiku-5-5/4-5, opus-4-1; sonnet-4-5 and opus-4-1 LEGACY).
+//   The us. profiles of claude-3-haiku and claude-3-sonnet are still listed ACTIVE but invoke 404s 'end of its life' (0-day path, hidden).
+//   Mythos 5/5.1/5.2 are not listed. Invoke 403s 'not available for this account' on every id newer than opus-4-6 / sonnet-4-6.
+// - Mantle also lists 7 undated 'anthropic.*' aliases, but they answer NEITHER OpenAI route ("does not support
 //   the '/v1/chat/completions' API", same for '/v1/responses') - Anthropic on Bedrock is invoke-only.
 // - Mantle accepts OpenAI tools on every id probed except writer.palmyra-vision-7b (see SKIP_MANTLE_TOOLS_IDS):
 //   zai.glm-4.7, openai.gpt-oss-120b, qwen.qwen3-coder-next and mistral.mistral-large-3-675b-instruct all
@@ -57,10 +55,11 @@ const SKIP_MANTLE_TOOLS_IDS = ['writer.palmyra-vision-7b']; // 400s: '"auto" too
 // `api: 'responses'`: model only implements the OpenAI Responses API (on the '/openai/v1/responses' path) and rejects
 // Chat Completions with a 400 - see https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html
 // GPT-5.x ctx is 1M per the AWS model cards (272K is only the short/long pricing-tier boundary); out stays 128000 (cards say
-// "N/A"); GPT-6 1,050,000 / 128,000 per the Astra card; GPT-6.1 Sol 1M per its card (out: card 131,072, OpenAI 128,000). deepseek.v3.1 out 8192 and kimi-k2-thinking out 16384 per their cards' "Max output tokens".
+// "N/A"); GPT-6 1,050,000 / 128,000 per the Astra card; GPT-6.1 Sol 1M per its card (out: card 131,072, OpenAI 128,000); GPT-6.1 Terra 1,050,000 / 128,000 per its card. deepseek.v3.1 out 8192 and kimi-k2-thinking out 16384 per their cards' "Max output tokens".
 // Entries with `api: 'responses'` win over the foundation-model listing: AWS also lists GPT-5.6 and GPT-6 as foundation models
-// (2026-09), which described them as 131K Chat Completions models without reasoning. Their us./global. profiles keep the fused
-// path: per the AWS card Mantle serves no geo/global ids, so those likely need bedrock-runtime (not wired, unverified here).
+// (2026-09), which described them as 131K Chat Completions models without reasoning. Their us./global. profiles go through
+// Converse: Mantle serves no geo/global ids ("The model 'us.openai.gpt-6-sol' does not exist" on both Mantle routes).
+// Those profiles are sized from this table too: on these ids converse.maxTokensMaximum is the output cap (128000), not the context.
 const KNOWN_MANTLE_ONLY: Record<string, { label: string; ctx: number; out: number; vision?: true; reasoning?: true; api?: 'responses' }> = {
   'deepseek.v3.1': { label: 'DeepSeek V3.1', ctx: 131072, out: 8192 },
   'moonshotai.kimi-k2-thinking': { label: 'Kimi K2 Thinking', ctx: 262144, out: 16384, reasoning: true },
@@ -73,6 +72,7 @@ const KNOWN_MANTLE_ONLY: Record<string, { label: string; ctx: number; out: numbe
   'openai.gpt-6-luna': { label: 'GPT-6 Luna', ctx: 1050000, out: 128000, vision: true, reasoning: true, api: 'responses' },
   'openai.gpt-6-sol': { label: 'GPT-6 Sol', ctx: 1050000, out: 128000, vision: true, reasoning: true, api: 'responses' },
   'openai.gpt-6.1-sol': { label: 'GPT-6.1 Sol', ctx: 1000000, out: 128000, vision: true, reasoning: true, api: 'responses' },
+  'openai.gpt-6.1-terra': { label: 'GPT-6.1 Terra', ctx: 1050000, out: 128000, vision: true, reasoning: true, api: 'responses' },
   'openai.gpt-oss-20b': { label: 'GPT-OSS 20B', ctx: 131072, out: 128000 },
   'openai.gpt-oss-120b': { label: 'GPT-OSS 120B', ctx: 131072, out: 128000 },
   'qwen.qwen3-32b': { label: 'Qwen3 32B', ctx: 131072, out: 16384 },
@@ -234,6 +234,7 @@ export function bedrockModelsToDescriptions(
     hasMantle: boolean;
     isLegacy: boolean;
     isProfile: boolean;
+    metadataOnly: boolean; // a base that is not served on demand: not a model of its own, it only describes its inference profiles
     streaming: boolean;
     converseMaxTokens: number | null;
     // capabilities detected from FM metadata
@@ -261,6 +262,9 @@ export function bedrockModelsToDescriptions(
       continue;
     }
 
+    // the listing is not filtered to on-demand: most profile bases are INFERENCE_PROFILE-only, and their profiles take label, limits and capabilities from here
+    const metadataOnly = !(fm.inferenceTypesSupported?.includes('ON_DEMAND') ?? true);
+
     modelMap.set(baseId, {
       id: baseId,
       label: fm.modelName,
@@ -268,6 +272,7 @@ export function bedrockModelsToDescriptions(
       hasMantle,
       isLegacy: fm.modelLifecycle?.status === 'LEGACY',
       isProfile: false,
+      metadataOnly,
       streaming: fm.responseStreamingSupported ?? true,
       converseMaxTokens: fm.converse?.maxTokensMaximum ?? null,
       reasoning: !!fm.converse?.reasoningSupported?.embedded,
@@ -277,7 +282,7 @@ export function bedrockModelsToDescriptions(
     });
 
     // mark as used in mantle - except curated Responses models, described by the Mantle-only pass below
-    if (hasMantle && !_isKnownMantleResponses(baseId))
+    if (!metadataOnly && hasMantle && !_isKnownMantleResponses(baseId))
       remainingMantleModelIds.delete(baseId);
   }
 
@@ -302,11 +307,13 @@ export function bedrockModelsToDescriptions(
       id: ip.inferenceProfileId,
       label: ip.inferenceProfileName + (foundationMeta ? '' : ' [?]'),
       provider: _extractProvider(ip.inferenceProfileId),
-      hasMantle,
+      hasMantle: false, // (was: hadMantle,) 2026-11-05: Mantle serves no geo/global ids (404 "does not exist"): profiles go through Converse, even when the base id is on Mantle
       isLegacy: ip.status === 'LEGACY',
       isProfile: true,
+      metadataOnly: false,
       streaming: foundationMeta?.streaming ?? true,
-      converseMaxTokens: foundationMeta?.converseMaxTokens ?? null,
+      // a base without on-demand serving reports its output cap there (openai.gpt-* 128000, writer.palmyra-x5 8192), which must not become the context
+      converseMaxTokens: (!foundationMeta?.metadataOnly || foundationMeta.provider === 'Amazon') ? foundationMeta?.converseMaxTokens ?? null : null,
       reasoning: foundationMeta?.reasoning ?? false,
       inputImage: foundationMeta?.inputImage ?? false,
       outputAudio: foundationMeta?.outputAudio ?? false,
@@ -331,6 +338,7 @@ export function bedrockModelsToDescriptions(
   const bedrockAPIMantle = { paramId: 'llmVndBedrockAPI', initialValue: 'mantle' } as const satisfies DModelParameterSpecAny;
   const bedrockAPIMantleResponses = { paramId: 'llmVndBedrockAPI', initialValue: 'mantle-responses' } as const satisfies DModelParameterSpecAny;
   for (const [modelId, modelMeta] of modelMap) {
+    if (modelMeta.metadataOnly) continue;
     if (_seemsAnthropicBedrockModel(modelId)) {
 
       // Anthropic models
@@ -370,9 +378,10 @@ export function bedrockModelsToDescriptions(
       // Non-Anthropic models - may call them via mantle (if hasMantle) or converse (if not legacy)
       const isMantle = modelMeta.hasMantle;
       const isConverseCapable = !modelMeta.isLegacy;
+      const knownBase = modelMeta.isProfile ? _findKnownMantleModel(_stripRegionPrefix(modelId)) : undefined; // a profile of a curated id
       const interfaces = [LLM_IF_OAI_Chat];
-      if (modelMeta.reasoning) interfaces.push(LLM_IF_OAI_Reasoning);
-      if (modelMeta.inputImage) interfaces.push(LLM_IF_OAI_Vision);
+      if (modelMeta.reasoning || knownBase?.reasoning) interfaces.push(LLM_IF_OAI_Reasoning);
+      if (modelMeta.inputImage || knownBase?.vision) interfaces.push(LLM_IF_OAI_Vision);
       if (isMantle ? !SKIP_MANTLE_TOOLS_IDS.includes(_stripRegionPrefix(modelId)) : isConverseCapable) interfaces.push(LLM_IF_OAI_Fn); // Converse: toolConfig; Mantle: OpenAI tools (both live-probed 2026-08-17)
       if (modelMeta.outputAudio) interfaces.push(LLM_IF_Outputs_Audio);
       if (modelMeta.outputImage) interfaces.push(LLM_IF_Outputs_Image);
@@ -389,9 +398,10 @@ export function bedrockModelsToDescriptions(
         // input+output against it (voxtral-mini 32768, gemma-3 131072, glm-4.7 202752, palmyra-vision 4096 all
         // 400 when maxTokens == that value); on Amazon first-party it IS the output cap (nova-pro reports 10000
         // yet accepts a 62,223-token prompt; AWS docs: 300K context / 10K max output).
-        ...(modelMeta.provider === 'Amazon'
-          ? { contextWindow: null, ...(modelMeta.converseMaxTokens ? { maxCompletionTokens: modelMeta.converseMaxTokens } : {}) }
-          : { contextWindow: modelMeta.converseMaxTokens ?? null }),
+        ...(knownBase ? { contextWindow: knownBase.ctx, maxCompletionTokens: knownBase.out }
+          : modelMeta.provider === 'Amazon'
+            ? { contextWindow: null, ...(modelMeta.converseMaxTokens ? { maxCompletionTokens: modelMeta.converseMaxTokens } : {}) }
+            : { contextWindow: modelMeta.converseMaxTokens ?? null }),
         interfaces,
         parameterSpecs: [isMantle ? bedrockAPIMantle : bedrockAPIConverse],
         hidden: !(isMantle || isConverseCapable), // show if mantle or converse-capable
@@ -492,6 +502,7 @@ function _bedrockModelSort(a: ModelDescriptionSchema, b: ModelDescriptionSchema)
   // --- Anthropic: family > class > variant > region ---
   const familyPrecedence: string[][] = [
     ['-fable-5-5', '-mythos-5-5', '-opus-5-5', '-sonnet-5-5', '-haiku-5-5'], // Claude 5.5 gen
+    ['-fable-5-2', '-mythos-5-2', '-opus-5-2', '-sonnet-5-2', '-haiku-5-2'], // Claude 5.2 gen
     ['-fable-5-1', '-mythos-5-1', '-opus-5-1', '-sonnet-5-1', '-haiku-5-1'], // Claude 5.1 gen
     ['-fable-5', '-mythos-5', '-opus-5', '-sonnet-5', '-haiku-5'], // Claude 5 gen
     ['-4-8'], ['-4-7'], ['-4-6'], ['-4-5-'], ['-4-1-'], ['-4-'], ['-3-7-'], ['-3-5-'], ['-3-'],

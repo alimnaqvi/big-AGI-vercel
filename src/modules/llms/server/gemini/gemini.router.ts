@@ -94,9 +94,7 @@ export const llmGeminiRouter = createTRPCRouter({
     .output(ListModelsResponse_schema)
     .query(async ({ input, signal }) => {
 
-      const models = await listModelsRunDispatch(input.access, signal);
-
-      return { models };
+      return await listModelsRunDispatch(input.access, signal);
     }),
 
 
@@ -134,6 +132,7 @@ export const llmGeminiRouter = createTRPCRouter({
             },
           }),
         },
+        store: false, // opt out of request logging, as the chat adapter does
       };
 
       // -> heartbeats, while waiting for the generation response (4K takes 60-90s)

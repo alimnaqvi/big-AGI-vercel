@@ -14,7 +14,7 @@ import { hasKeys } from '~/common/util/objectUtils';
 import { toLocalDateYYYYMMDD } from '~/common/util/timeUtils';
 
 import type { DModelDomainId } from './model.domains.types';
-import type { DModelsService, DModelsServiceId } from './llms.service.types';
+import type { DModelsService, DModelsServiceAccessStatus, DModelsServiceId } from './llms.service.types';
 import type { DModelsChangelogEntry, DModelsChangelogVia } from './llms.changelog';
 import { DLLM, DLLMId, LLM_IF_OAI_Fn, LLM_IF_OAI_Vision } from './llms.types';
 import { DModelParameterId, DModelParameterRegistry, DModelParameterValues, LLMImplicitParametersRuntimeFallback } from './llms.parameters';
@@ -61,6 +61,7 @@ interface LlmsRootActions {
   updateServiceLabel: (id: DModelsServiceId, label: string, allowEmpty?: boolean) => void;
   updateServiceSettings: <TServiceSettings>(id: DModelsServiceId, partialSettings: Partial<TServiceSettings>) => void;
   stampServiceDefs: (id: DModelsServiceId, defsV: string) => void;
+  setServiceAccessStatus: (id: DModelsServiceId, accessStatus: DModelsServiceAccessStatus | undefined) => void;
 
   setConfServiceId: (id: DModelsServiceId | null) => void;
 
@@ -461,6 +462,15 @@ export const useModelsStore = create<LlmsStore>()(persist(
         ),
       })),
 
+    setServiceAccessStatus: (id: DModelsServiceId, accessStatus: DModelsServiceAccessStatus | undefined) =>
+      set(state => ({
+        sources: state.sources.map((s: DModelsService): DModelsService =>
+          s.id === id
+            ? { ...s, accessStatus }
+            : s,
+        ),
+      })),
+
     setConfServiceId: (id: DModelsServiceId | null) =>
       set({ confServiceId: id }),
 
@@ -590,14 +600,14 @@ export function findModelsServiceOrNull<TServiceSettings extends object>(service
 }
 
 export function getChatLLMId(): DLLMId | null {
-  return getDomainModelConfiguration('primaryChat', true, true)?.modelId ?? null;
+  return getDomainModelConfiguration('primaryChat')?.modelId ?? null;
 }
 
 
 export function getDomainModelIdOrThrow(tryDomains: DModelDomainId[], requireFunctionCallTools: boolean, requireImageInput: boolean, useCaseLabel: string): DLLMId {
   for (const domain of tryDomains) {
     const isLastTry = domain === tryDomains[tryDomains.length - 1];
-    const llmId = getDomainModelConfiguration(domain, true, true)?.modelId;
+    const llmId = getDomainModelConfiguration(domain)?.modelId;
     if (!llmId) continue;
     try {
       const llm = findLLMOrThrow(llmId);

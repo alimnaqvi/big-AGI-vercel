@@ -1,8 +1,11 @@
 import * as z from 'zod/v4';
+import { TRPCError } from '@trpc/server';
 
 import { fetchJsonOrTRPCThrow, fetchResponseOrTRPCThrow } from '~/server/trpc/trpc.router.fetchers';
 
 import { modelPickOrAuto } from '~/common/util/modelPickUtils';
+
+import { llmsApiUrl } from '~/modules/llms/shared/llm.isomorphic';
 
 import type { SpeexSpeechParticle, SpeexWire_Access_ElevenLabs, SpeexWire_ListVoices_Output } from './rpc.wiretypes';
 import type { SynthesizeBackendFn } from './synthesize.core';
@@ -144,7 +147,7 @@ function _parseTTSResponseHeaders(headers: Headers): Pick<Extract<SpeexSpeechPar
 function _elevenlabsAccess(access: SpeexWire_Access_ElevenLabs, apiPath: string): { headers: HeadersInit; url: string } {
   const apiKey = (access.apiKey /*|| env.ELEVENLABS_API_KEY */ || '').trim();
   if (!apiKey)
-    throw new Error('Missing ElevenLabs API key');
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing ElevenLabs API key' });
 
   let host = (access.apiHost /*|| env.ELEVENLABS_API_HOST*/ || 'api.elevenlabs.io').trim();
   if (!host.startsWith('http'))
@@ -158,7 +161,7 @@ function _elevenlabsAccess(access: SpeexWire_Access_ElevenLabs, apiPath: string)
       'Content-Type': 'application/json',
       'xi-api-key': apiKey,
     },
-    url: host + apiPath,
+    url: llmsApiUrl(host, apiPath),
   };
 }
 

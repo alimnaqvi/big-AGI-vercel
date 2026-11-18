@@ -2,6 +2,7 @@ import * as React from 'react';
 import Head from 'next/head';
 import dynamic from 'next/dynamic';
 import { MyAppProps } from 'next/app';
+import type { BeforeSend as VercelAnalyticsBeforeSend } from '@vercel/analytics/next';
 
 import { Brand } from '~/common/app.config';
 import { apiQuery } from '~/common/util/trpc.client';
@@ -11,6 +12,9 @@ import { apiQuery } from '~/common/util/trpc.client';
 const VercelAnalytics = dynamic(() => import('@vercel/analytics/next').then(mod => mod.Analytics), { ssr: false });
 // const VercelSpeedInsights = dynamic(() => import('@vercel/speed-insights/next').then(mod => mod.SpeedInsights), { ssr: false });
 
+// [privacy] page addresses are sent without their fragment: what a page keeps after the '#' stays in the browser
+const vercelAnalyticsWithoutFragment: VercelAnalyticsBeforeSend = (event) => ({ ...event, url: event.url.split('#')[0] });
+
 
 import 'katex/dist/katex.min.css';
 import '~/common/styles/CodePrism.css';
@@ -18,6 +22,7 @@ import '~/common/styles/GithubMarkdown.css';
 import '~/common/styles/NProgress.css';
 import '~/common/styles/agi.effects.css';
 import '~/common/styles/app.styles.css';
+import '~/common/styles/fonts/app.fonts.css';
 
 import { ErrorBoundary } from '~/common/components/ErrorBoundary';
 import { Is } from '~/common/util/pwaUtils';
@@ -65,7 +70,7 @@ const Big_AGI_App = ({ Component, emotionCache, pageProps }: MyAppProps) => {
     {hasPostHogAnalytics && <OptionalPostHogAnalytics />}
     <OptionalUrlTrackingCleaner />
 
-    {Is.Deployment.VercelFromFrontend && <VercelAnalytics debug={false} />}
+    {Is.Deployment.VercelFromFrontend && <VercelAnalytics debug={false} beforeSend={vercelAnalyticsWithoutFragment} />}
     {/*{Is.Deployment.VercelFromFrontend && <VercelSpeedInsights debug={false} sampleRate={1 / 2} />}*/}
 
   </>;

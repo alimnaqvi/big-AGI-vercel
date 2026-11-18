@@ -16,15 +16,6 @@ import { NousResearchIcon } from '~/common/components/icons/vendors/NousResearch
 import { NovitaAIIcon } from '~/common/components/icons/vendors/NovitaAIIcon';
 
 
-/**
- * Normalizes a host URL by stripping trailing /v1 or /v1/ suffix.
- * Server-side OPENAI_API_PATHS, uses /v1/ for all paths, so we don't repeat it here.
- */
-function normalizeHostStripV1Suffix(host: string): string {
-  return host.replace(/\/v1\/?$/, '');
-}
-
-
 // Verified OpenAI-compatible providers that work with the 'openai' dialect
 interface VerifiedProvider {
   id: string;
@@ -48,9 +39,15 @@ const OPENAI_COMPATIBLE_PROVIDERS: VerifiedProvider[] = [
   { id: 'minimax', label: 'MiniMax', host: 'https://api.minimax.io', hostMatch: 'minimax.io', category: 'Example Providers', description: 'Proprietary reasoning models', docsUrl: 'https://platform.minimax.io/docs', icon: MiniMaxIcon },
   { id: 'nous', label: 'Nous Research', host: 'https://inference-api.nousresearch.com', hostMatch: 'nousresearch.com', category: 'Example Providers', description: 'Hermes models + Portal subscription gateway', docsUrl: 'https://portal.nousresearch.com/', icon: NousResearchIcon },
   { id: 'novita', label: 'Novita AI', host: 'https://api.novita.ai/openai', hostMatch: 'novita.ai', category: 'Example Providers', description: 'Budget open model inference', docsUrl: 'https://novita.ai/docs', icon: NovitaAIIcon },
+  { id: 'sarvam', label: 'Sarvam AI', host: 'https://api.sarvam.ai/v2', hostMatch: 'sarvam.ai', category: 'Example Providers', description: 'Indic-language and open-weight models', docsUrl: 'https://docs.sarvam.ai/api/token-factory' },
   // Example Proxies
   { id: 'cloudflare', label: 'Cloudflare AI Gateway', host: 'https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/openai', hostMatch: 'gateway.ai.cloudflare.com', category: 'Example Proxies', description: 'Caching and analytics gateway', docsUrl: 'https://developers.cloudflare.com/ai-gateway/', icon: CloudflareIcon },
 ];
+
+// Find a provider by its id (the docs reader's icon keys use these ids)
+export function findOpenAIAutoProviderById(id: string): VerifiedProvider | undefined {
+  return OPENAI_COMPATIBLE_PROVIDERS.find(p => p.id === id);
+}
 
 // Find matching provider based on current host value
 export function findMatchingOpenAIAutoProvider(host: string): VerifiedProvider | undefined {
@@ -58,6 +55,14 @@ export function findMatchingOpenAIAutoProvider(host: string): VerifiedProvider |
   return OPENAI_COMPATIBLE_PROVIDERS.find(p =>
     host.includes(p.hostMatch ?? p.host),
   );
+}
+
+/**
+ * The base URL in typed or pasted text: a full endpoint URL loses its endpoint (.../chat/completions, .../responses).
+ * The endpoint must follow a host or path character, or a hostname ('https://responses...') would be cut as it is typed.
+ */
+function _baseUrlFromInput(text: string): string {
+  return text.replace(/([^/])\/(?:chat\/completions|responses)\/?$/, '$1');
 }
 
 
@@ -85,7 +90,7 @@ export function OpenAIHostAutocomplete(props: {
     if (newValue === null)
       props.onChange('');
     else if (typeof newValue === 'string')
-      props.onChange(normalizeHostStripV1Suffix(newValue));
+      props.onChange(_baseUrlFromInput(newValue));
     else
       props.onChange(newValue.host);
   }, [props]);
@@ -95,8 +100,8 @@ export function OpenAIHostAutocomplete(props: {
     if (reason !== 'input')
       return;
 
-    // strip /v1 suffix immediately - gives user clear feedback that it's not needed
-    newInputValue = normalizeHostStripV1Suffix(newInputValue);
+    // reduce a pasted endpoint to its base URL immediately - gives user clear feedback of what is used
+    newInputValue = _baseUrlFromInput(newInputValue);
     setInputValue(newInputValue);
     props.onChange(newInputValue);
   }, [props]);
@@ -111,7 +116,7 @@ export function OpenAIHostAutocomplete(props: {
       <Box sx={{ display: 'flex', flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', justifyContent: 'space-between' }}>
         <FormLabel sx={{ flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
           API Endpoint
-          <GoodTooltip title={`An OpenAI compatible endpoint to be used in place of 'api.openai.com'.\n\nSelect a verified provider from the list, or type any custom URL.`} arrow placement='top'>
+          <GoodTooltip title={`An OpenAI compatible endpoint to be used in place of 'api.openai.com'.\n\nSelect a verified provider from the list, or type the base URL of any other. A trailing /v1 is optional, another version (e.g. /v2) is kept.`} arrow placement='top'>
             <InfoOutlinedIcon sx={{ ml: 0.5, cursor: 'pointer', fontSize: 'md', color: 'primary.solidBg' }} />
           </GoodTooltip>
         </FormLabel>

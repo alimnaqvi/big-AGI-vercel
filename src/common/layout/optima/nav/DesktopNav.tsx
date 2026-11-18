@@ -2,22 +2,18 @@ import * as React from 'react';
 import Router from 'next/router';
 
 import type { SxProps } from '@mui/joy/styles/types';
-import { Divider, Dropdown, FormHelperText, ListDivider, ListItem, ListItemButton, ListItemDecorator, Menu, MenuButton, MenuItem, Tooltip, Typography } from '@mui/joy';
+import { Divider, Dropdown, ListDivider, ListItem, ListItemButton, ListItemDecorator, Menu, MenuButton, MenuItem, Tooltip, Typography } from '@mui/joy';
 import ArrowOutwardRoundedIcon from '@mui/icons-material/ArrowOutwardRounded';
-import CodeIcon from '@mui/icons-material/Code';
-import HistoryIcon from '@mui/icons-material/History';
 import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined';
 import MenuIcon from '@mui/icons-material/Menu';
 import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
 import TerminalOutlinedIcon from '@mui/icons-material/TerminalOutlined';
 
-import { blocksRenderHTMLIFrameCss } from '~/modules/blocks/code/code-renderers/RenderCodeHtmlIFrame';
+import { DocsMenuItem, WhatsNewMenuItem, WhatsNewNavDot } from '~/modules/news/components/WhatsNewIndicators';
 
 import { BuildInfoCard } from '../../../../apps/news/AppNews';
 
-import { BaseProduct } from '~/common/app.release';
 import { BigAgiSquircleIcon } from '~/common/components/icons/big-agi/BigAgiSquircleIcon';
-import { FeatureBadge } from '~/common/components/FeatureBadge';
 import { GoodModal } from '~/common/components/modals/GoodModal';
 import { PhSquaresFour } from '~/common/components/icons/phosphor/PhSquaresFour';
 import { checkDivider, checkVisibileIcon, NavItemApp, navItems } from '~/common/app.nav';
@@ -30,7 +26,6 @@ import { BringTheLove } from './BringTheLove';
 import { DesktopNavGroupBox, DesktopNavIcon, navItemClasses } from './DesktopNavIcon';
 import { InvertedBar, InvertedBarCornerItem } from '../InvertedBar';
 import { optimaActions, optimaOpenModels, optimaOpenPreferences, optimaToggleDrawer, useOptimaDrawerOpen, useOptimaDrawerPeeking, useOptimaModals } from '../useOptima';
-import { scratchClipSupported, useScratchClipVisibility } from '../scratchclip/store-scratchclip';
 
 
 export const bigAgiProUrl = 'https://big-agi.com' + clientUtmSource('upgrade-apps');
@@ -53,50 +48,18 @@ const navItemsDividerSx: SxProps = {
 
 export function DesktopNav(props: { component: React.ElementType, currentApp?: NavItemApp }) {
 
-  // state
-  const [releaseNotesShown, setReleaseNotesShown] = React.useState(false);
-
-  /**
-   * NOTE: shall we fall back to the 'standard' release notes when not available on the tenant?
-   * - prob not because this could be a per-company deployment, and we don't know the tenant's release notes
-   */
-  const releaseNotesUrl = BaseProduct.ReleaseNotes;
-
   // external state
   const isDrawerOpen = useOptimaDrawerOpen();
   const isDrawerPeeking = useOptimaDrawerPeeking();
   const { showPromisedOverlay } = useOverlayComponents();
   const { showModels, showPreferences } = useOptimaModals();
   const { peekDrawerEnter, peekDrawerLeave } = optimaActions();
-  const { isVisible: isScratchClipVisible, toggleVisibility: toggleScratchClipVisibility } = useScratchClipVisibility();
 
   // derived state
   const noLLMs = !useHasLLMs();
 
 
   // handlers
-
-  const handleShowReleaseNotes = React.useCallback(async () => {
-    if (!releaseNotesUrl) return;
-    setReleaseNotesShown(true);
-    return await showPromisedOverlay('app-recent-changes', { rejectWithValue: false }, ({ onUserReject }) =>
-      <GoodModal
-        open
-        onClose={onUserReject}
-        noTitleBar
-        themedColor='neutral'
-        unfilterBackdrop
-        sx={{ minWidth: { xs: 400, sm: 580, md: 780, lg: 890 } }}
-      >
-        <iframe
-          src={releaseNotesUrl}
-          style={{ ...blocksRenderHTMLIFrameCss, height: '70svh' }}
-          title='Release Notes Embed'
-          loading='lazy' // do not load until visible in the viewport
-        />
-      </GoodModal>,
-    );
-  }, [releaseNotesUrl, showPromisedOverlay]);
 
   const handleShowTechnologies = React.useCallback(async () => {
     return await showPromisedOverlay<boolean>('app-recent-changes', { rejectWithValue: false }, ({ onUserReject }) =>
@@ -159,7 +122,7 @@ export function DesktopNav(props: { component: React.ElementType, currentApp?: N
 
         <Tooltip disableInteractive enterDelay={600} title='Apps & Tools'>
           <MenuButton slots={{ root: DesktopNavIcon }} slotProps={{ root: { className: navItemClasses.typeApp } }}>
-            <PhSquaresFour />
+            <WhatsNewNavDot><PhSquaresFour /></WhatsNewNavDot>
           </MenuButton>
         </Tooltip>
 
@@ -210,10 +173,6 @@ export function DesktopNav(props: { component: React.ElementType, currentApp?: N
             <ListItemDecorator><TerminalOutlinedIcon /></ListItemDecorator>
             AI Inspector
           </MenuItem>
-          <MenuItem disabled={!scratchClipSupported()} onClick={toggleScratchClipVisibility}>
-            <ListItemDecorator><HistoryIcon /></ListItemDecorator>
-            {isScratchClipVisible ? 'Hide ' : ''}Clipboard {scratchClipSupported() ? 'History' : '(not supported)'}
-          </MenuItem>
           <ListDivider />
 
           {/* SUPPORT Section */}
@@ -222,24 +181,8 @@ export function DesktopNav(props: { component: React.ElementType, currentApp?: N
               Support
             </Typography>
           </ListItem>
-          <MenuItem component='a' href={BaseProduct.SupportForm()} target='_blank'>
-            <ListItemDecorator>🔥</ListItemDecorator>
-            <div>
-              Improve Big-AGI
-              <FormHelperText>AI fixes what you report</FormHelperText>
-            </div>
-            <ArrowOutwardRoundedIcon sx={{ ml: 'auto' }} />
-          </MenuItem>
-          {!!releaseNotesUrl && (
-            <MenuItem onClick={handleShowReleaseNotes}>
-              <ListItemDecorator>
-                <FeatureBadge featureKey='nav-quick-menu' active={releaseNotesShown}>
-                  <CodeIcon />
-                </FeatureBadge>
-              </ListItemDecorator>
-              Release Notes
-            </MenuItem>
-          )}
+          <WhatsNewMenuItem />
+          <DocsMenuItem />
           <MenuItem onClick={handleShowTechnologies}>
             {/*<ListItemDecorator><BuildCircleOutlinedIcon /></ListItemDecorator>*/}
             <ListItemDecorator />
@@ -250,7 +193,7 @@ export function DesktopNav(props: { component: React.ElementType, currentApp?: N
       </Dropdown>);
 
     return components;
-  }, [toggleScratchClipVisibility, isScratchClipVisible, releaseNotesUrl, handleShowReleaseNotes, releaseNotesShown, handleShowTechnologies, props.currentApp, isDrawerOpen]);
+  }, [handleShowTechnologies, props.currentApp, isDrawerOpen]);
 
 
   // External link items

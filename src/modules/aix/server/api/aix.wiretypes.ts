@@ -2,10 +2,12 @@ import * as z from 'zod/v4';
 
 // Used to align Particles to the Typescript definitions from the frontend-side, on 'chat.fragments.ts'
 import type { DMessageFragmentVendorStateKnown, DMessageToolResponsePart } from '~/common/stores/chat/chat.fragments';
+import type { DMessageGenerator } from '~/common/stores/chat/chat.message';
 
 import { anthropicAccessSchema } from '~/modules/llms/server/anthropic/anthropic.access';
 import { bedrockAccessSchema } from '~/modules/llms/server/bedrock/bedrock.access';
 import { geminiAccessSchema } from '~/modules/llms/server/gemini/gemini.access';
+import { UpstreamResourceId_schema } from '~/modules/llms/server/llm.server.types';
 import { ollamaAccessSchema } from '~/modules/llms/server/ollama/ollama.access';
 import { openAIAccessSchema } from '~/modules/llms/server/openai/openai.access';
 
@@ -467,10 +469,10 @@ export namespace AixWire_Tooling {
    * - function_call: MUST use a specific Function Tool [DISABLED 2026-07-17 - see below]
    * - none: same as not giving the model any tool [REMOVED - just give no tools]
    *
-   * @deprecated forced tool use is a thing of the past - 2026-06-09: Claude Fable/Mythos 5 (and 5.1) reject it
-   * with a 400 ('tool_choice ... not supported for this model'); the Anthropic and OpenRouter adapters
-   * coerce to 'auto' + a system steering hint. New code should use 'auto' (or no policy)
-   * and instruct the model to call the tool in the prompt instead.
+   * @deprecated forced tool use is a thing of the past: Claude Fable/Mythos 5.x reject it with a 400 ('tool_choice ...
+   * not supported for this model'), and so do Meta AI and thinking-mode Kimi. Adapters send 'auto' + a system steering hint
+   * where the vendor rejects or mishandles it: Anthropic (per model), OpenRouter, Mistral, Moonshot (thinking on, except K3)
+   * and Meta AI. New code should use 'auto' (or no policy) and instruct the model to call the tool in the prompt instead.
    *
    * 2026-07-17: 'function_call' (forced NAMED tool) commented out AIX-wide: Moonshot also 400s it on
    * all thinking-mode requests ("tool_choice 'specified' is incompatible with thinking enabled" - K3
@@ -551,7 +553,6 @@ export namespace AixWire_API {
     // vndGeminiShowThoughts: z.boolean().optional(),
 
     // Anthropic
-    vndAnt1MContext: z.boolean().optional(),
     vndAntCodeSandbox: z.enum(['auto']).optional(), // standalone server-side code sandbox (also implied by Skills / programmatic tool calling)
     vndAntContainerId: z.string().optional(),
     vndAntInfSpeed: z.enum(['fast']).optional(),
@@ -626,12 +627,12 @@ export namespace AixWire_API {
   export const UpstreamHandle_schema = z.discriminatedUnion('uht', [
     z.object({
       uht: z.literal('vnd.oai.responses'),
-      runId: z.string(), // upstream: OpenAI Responses `response.id`
+      runId: UpstreamResourceId_schema, // upstream: OpenAI Responses `response.id`, placed in the URL path
       startingAfter: z.number().optional(), // the sequence number of event after which to start streaming
     }),
     z.object({
       uht: z.literal('vnd.gem.interactions'),
-      runId: z.string(), // upstream: Gemini Interactions `interaction.id`
+      runId: z.string(), // upstream: Gemini Interactions `interaction.id` (URL-encoded by the path builders)
     }),
   ]);
 
@@ -760,9 +761,9 @@ export namespace AixWire_Particles {
   export type ChatControlOp =
   // | { cg: 'start' } // not really used for now
     | { cg: 'end', terminationReason: CGEndReason /* we know why we're sending 'end' */, tokenStopReason?: GCTokenStopReason /* we may or not have gotten a logical token stop reason from the dispatch */, tokenStopError?: string /* optional vendor-composed human-readable detail paired with tokenStopReason */ }
-    | { cg: 'issue', issueId: CGIssueId, issueText: string }
+    | { cg: 'issue', issueId: CGIssueId, issueText: string, issueCause?: CGIssueCause }
     | { cg: 'aix-info', ait: 'flow-cont' /* important: establishes a checkpoint */, text: string }
-    | { cg: 'aix-retry-reset', rScope: 'srv-dispatch' | 'srv-op' | 'cli-ll', rClearStrategy: 'none' | 'since-checkpoint' | 'all', reason: string, attempt: number, maxAttempts: number, delayMs: number, causeHttp?: number, causeConn?: string }
+    | { cg: 'aix-retry-reset', rScope: 'srv-dispatch' | 'srv-op' | 'cli-ll', rClearStrategy: 'none' | 'since-checkpoint' | 'all', reason: string, attempt: number, maxAttempts: number, phase: 'waiting' | 'started' | 'gave-up' /* what the message announces: the wait before the attempt, the attempt beginning, no attempts left */, delayMs: number /* the wait; sent in every phase, as a client older than `phase` reads the phase from it: > 0 waiting, else gave-up */, causeHttp?: number, causeConn?: string, calm?: true /* the retry profile marks the condition as expected (e.g. a busy best-effort tier): rendered without alarm */ }
     | { cg: 'set-metrics', metrics: CGSelectMetrics }
     | { cg: 'set-model', name: string }
     | { cg: 'set-provider-infra', label: string }
@@ -784,15 +785,55 @@ export namespace AixWire_Particles {
     | 'dispatch-read'           // [2] "
     | 'dispatch-parse';         // [2] "
 
-  export type GCTokenStopReason =
+  export type CGIssueCause = _CGIssueCause_DispatchFetch;
+  type _CGIssueCause_DispatchFetch = {
+    causeConn?: string;         // [dispatch-fetch] system error name of a failed connection
+    causeHttpStatus?: number;   // [dispatch-fetch] upstream HTTP status
+    causeVendorCode?: string;   // [dispatch-fetch] vendor error code from the HTTP body
+  }
+
+
+  // Token stop reasons, grouped by class. The class is the one grouping shared by the edge (analytics) and the
+  // browser (reassembler outcome): 'ok' is the only success, 'truncated' is an error typed apart, 'error' is the rest.
+  export type GCTokenStopReason = _GCTokenStopReason_Ok | _GCTokenStopReason_Truncated | _GCTokenStopReason_Error;
+  type _GCTokenStopReason_Ok =
     | 'ok'                      // clean, including reaching 'stop sequences'
-    | 'ok-tool_invocations'     // clean & tool invocations
-    // premature:
+    | 'ok-tool_invocations';    // clean & tool invocations
+  type _GCTokenStopReason_Truncated =
+    | 'out-of-tokens';          // got out of tokens: the output is cut, kept but not usable as-is
+  type _GCTokenStopReason_Error =
     | 'cg-issue'                // [1][2] chat-generation issue (see CGIssueId, mostly a dispatch or dialect issue)
     | 'filter-content'          // content filter (e.g. profanity)
     | 'filter-recitation'       // recitation filter (e.g. recitation)
-    | 'filter-refusal'          // safety refusal filter (e.g. Anthropic safety concerns)
-    | 'out-of-tokens';          // got out of tokens
+    | 'filter-refusal';         // safety refusal filter (e.g. Anthropic safety concerns)
+
+  type GCStopClass = 'ok' | 'truncated' | 'error';
+
+  /** The projections of one wire stop reason: the class (edge analytics), the stored stop reason (DMessageGenerator.tokenStopReason, the client's persisted fact), the user-facing message appended on a cut */
+  export type GCStopReasonRow = { class: GCStopClass; stored: DMessageGenerator['tokenStopReason']; message?: string };
+
+  /** One row per wire stop reason, read through gcStopReasonRow() only: a wire value may be unknown to this build. */
+  const GC_STOP_REASONS = {
+    'ok':                  { class: 'ok', stored: undefined },
+    'ok-tool_invocations': { class: 'ok', stored: undefined },
+    'out-of-tokens':       { class: 'truncated', stored: 'out-of-tokens' },
+    'cg-issue':            { class: 'error', stored: 'issue' },
+    // emitted by: OpenAI content_filter, Gemini SAFETY/BLOCKLIST/PROHIBITED_CONTENT/SPII/IMAGE_*, Bedrock content filter
+    'filter-content':      { class: 'error', stored: 'filter', message: 'Response blocked by the provider\'s content filter.' },
+    // emitted by: Gemini RECITATION/IMAGE_RECITATION (note: can be FP-prone on benign content like code/quotes)
+    'filter-recitation':   { class: 'error', stored: 'filter', message: 'Response blocked - potential copyrighted/recited content.' },
+    // emitted by: Anthropic stop_reason=refusal, Gemini LANGUAGE (unsupported)
+    'filter-refusal':      { class: 'error', stored: 'filter', message: 'Response refused by the provider\'s safety classifier.' },
+  } as const satisfies Record<GCTokenStopReason, GCStopReasonRow>;
+
+  /** Row of a wire stop reason; undefined for a reason this build does not know (a newer server or peer). Own keys only: `in` passes 'toString'. */
+  export function gcStopReasonRow(reason: string): GCStopReasonRow | undefined {
+    return _isGCTokenStopReason(reason) ? GC_STOP_REASONS[reason] : undefined;
+  }
+
+  function _isGCTokenStopReason(reason: string): reason is GCTokenStopReason {
+    return Object.hasOwn(GC_STOP_REASONS, reason);
+  }
 
   /**
    * NOTE: break compatibility with this D-stored-type only when we'll
@@ -867,6 +908,7 @@ export namespace AixWire_Particles {
       | { nt: 'input-transform', itt: 'thinking-dropped', cause: 'prefix-changed' | 'model-switch' | (string & {}), reason: string, paths: string[] } // the server rewrote our request: dropped replayed thinking blocks, one particle per vendor reason; `cause` normalizes `reason` (open set), `paths` are wire locations. 'prefix-changed' is deliberately unspecific: the vendor's 'prefix_binding_mismatch' covers system/tools/message edits alike and doesn't say which - don't narrow it to "history edited" in copy, that's provably wrong for tool/system changes. client-side log for now
       | { nt: 'hres-discarded', kind: 'vnd.ant.file', fileId: string, filename?: string } // a provider-hosted file deleted by the Save policy without embedding; it may still exist in the model's sandbox
       | { nt: 'flow-cont', kind: 'vnd.ant.pause_turn', turn: number } // the generation continued in a new upstream request at this point (hosted-tool loop paused itself); rendered as a divider, `turn` is the 1-based continuation count
+      | { nt: 'late-issue', issueId: CGIssueId } // an issue that arrived after the vendor's stop reason (stream cut before the end marker, a trailing chunk failing to parse, a late error event): the response is complete, so it is not content
       )
     | { p: 'hres' } & ( // hosted resource - provider-hosted resource
       | { kind: 'vnd.ant.file', fileId: string, containerId?: string }

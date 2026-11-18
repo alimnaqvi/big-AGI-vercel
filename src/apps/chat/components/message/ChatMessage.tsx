@@ -13,9 +13,10 @@ import type { AixReattachMode } from '~/modules/aix/client/aix.client';
 import type { AutoBlocksHtmlRenderVariant } from '~/modules/blocks/AutoBlocksRenderer';
 import { ModelVendorAnthropic } from '~/modules/llms/vendors/anthropic/anthropic.vendor';
 import { useERCDiffActions } from '~/modules/blocks/enhanced-code/ERCDiffContext';
-import { vertexLinksCountInFragments, vertexLinksResolveFragments } from '~/modules/google/vertexai.client';
+import { vertexLinksInFragments } from '~/modules/google/vertexai.client';
 
-import { DMessage, DMessageGenerator, DMessageId, DMessageUserFlag, DMetaReferenceItem, MESSAGE_FLAG_AIX_SKIP, MESSAGE_FLAG_NOTIFY_COMPLETE, MESSAGE_FLAG_STARRED, MESSAGE_FLAG_VND_ANT_CACHE_AUTO, MESSAGE_FLAG_VND_ANT_CACHE_USER, messageFragmentsInFluxId, messageFragmentsReduceText, messageHasUserFlag, messageWasOutOfTokens } from '~/common/stores/chat/chat.message';
+import { DMessage, DMessageGenerator, DMessageId, DMessagePresentation, DMessageRole, DMessageUserFlag, DMetaReferenceItem, MESSAGE_FLAG_AIX_SKIP, MESSAGE_FLAG_NOTIFY_COMPLETE, MESSAGE_FLAG_STARRED, MESSAGE_FLAG_VND_ANT_CACHE_AUTO, MESSAGE_FLAG_VND_ANT_CACHE_USER, messageFragmentsInFluxId, messageFragmentsReduceText, messageHasUserFlag } from '~/common/stores/chat/chat.message';
+import { messageOutcome, messageOutcomeColor } from '~/common/stores/chat/chat.message.outcome';
 import { Release } from '~/common/app.release';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { adjustContentScaling, themeScalingMap } from '~/common/app.theme';
@@ -23,12 +24,13 @@ import { avatarIconSx, makeMessageAvatarIcon, messageBackground, useMessageAvata
 import { clipboardCopyDOMSelectionOrFallback, copyToClipboard } from '~/common/util/clipboardUtils';
 import { createTextContentFragment, DMessageFragment, DMessageFragmentId, isContentFragment, isTextContentFragment, reorderFragmentsInSlots, updateFragmentWithEditedText } from '~/common/stores/chat/chat.fragments';
 import { findFirstUserPromptFragment } from '~/common/stores/chat/chat.fragment-order';
+import { resolveMessagePresentation } from '~/common/stores/chat/chat.message.presentation';
 import { useUIPreferencesStore } from '~/common/stores/store-ui';
 import { useUXLabsStore } from '~/common/stores/store-ux-labs';
 
 import { BlockOpContinue } from './BlockOpContinue';
 import { BlockOpOptions } from './BlockOpOptions';
-import { BlockOpResolveLinks } from './BlockOpResolveLinks';
+import { BlockOpResolveVertexAILinks } from './BlockOpResolveVertexAILinks';
 import { BlockOpUpstreamResume } from './BlockOpUpstreamResume';
 import { ChatMessageBubble } from './ChatMessageBubble';
 import { ChatMessageInfoPopup } from './ChatMessageInfoPopup';
@@ -338,6 +340,8 @@ export function ChatMessage(props: {
   upstreamResumeMode?: AixReattachMode, // set by parent while a resume is in flight on this message
   onMessageDelete?: (messageId: string) => void,
   onMessageFragmentsReplace?: (messageId: DMessageId, fragments: DMessageFragment[]) => void, // the one write, per edit or single operation; without it the message is read-only
+  onMessagePresentationChange?: (messageId: DMessageId, update: Partial<DMessagePresentation> | null) => void,
+  onMessageSetRole?: (messageId: DMessageId, role: DMessageRole) => void,
   onMessageToggleUserFlag?: (messageId: string, flag: DMessageUserFlag, maxPerConversation?: number) => void,
   onMessageTruncate?: (messageId: string) => void,
   onReattachAsFile?: (file: File) => void,
@@ -353,7 +357,6 @@ export function ChatMessage(props: {
   const [bubbleAnchor, setBubbleAnchor] = React.useState<HTMLElement | null>(null);
   const [opsMenuAnchor, setOpsMenuAnchor] = React.useState<HTMLElement | null>(null);
   const [showInfoModal, setShowInfoModal] = React.useState(false);
-  const [userMarkdownFlipped, setUserMarkdownFlipped] = React.useState(false); // 'View as text/markdown', this message only, not saved
 
   // latest-message ref: lets stable callbacks read the current message without putting it in deps
   const messageRef = React.useRef(props.message);
@@ -392,9 +395,13 @@ export function ChatMessage(props: {
   const fromAssistant = messageRole === 'assistant';
   const fromSystem = messageRole === 'system';
   const fromUser = messageRole === 'user';
-  const userMarkdown = labsUserMarkdown !== userMarkdownFlipped;
+  const { textMode, fragmentGrouping } = resolveMessagePresentation(props.message.presentation, {
+    textMode: disableMarkdown || fromSystem || (fromUser && !labsUserMarkdown) ? 'plain' : 'markdown',
+    fragmentGrouping: labsUngroupedFragments ? 'ungrouped' : 'grouped',
+  });
   const messageHasBeenEdited = !!messageUpdated;
-  const msgGenOutOfTokens = messageWasOutOfTokens(messageGenerator);
+  const msgOutcome = messageOutcome(props.message);
+  const msgGenOutOfTokens = msgOutcome === 'truncated';
 
   const isUserMessageSkipped = messageHasUserFlag(props.message, MESSAGE_FLAG_AIX_SKIP);
   const isUserStarred = messageHasUserFlag(props.message, MESSAGE_FLAG_STARRED);
@@ -421,7 +428,7 @@ export function ChatMessage(props: {
   const lookForOptions = props.onMessageContinue !== undefined && props.isBottom === true && !msgGenOutOfTokens && fromAssistant && !messagePendingIncomplete && !isEditingText && uiComplexityMode !== 'minimal' && false;
 
   // Render tree: fragments grouped into nodes in message order, citations first; stable across streaming appends
-  const renderTreeOptions = React.useMemo((): CMBuildOptions => ({ trailingOptions: lookForOptions, ungrouped: labsUngroupedFragments }), [labsUngroupedFragments, lookForOptions]);
+  const renderTreeOptions = React.useMemo((): CMBuildOptions => ({ trailingOptions: lookForOptions, ungrouped: fragmentGrouping === 'ungrouped' }), [fragmentGrouping, lookForOptions]);
   const renderTree = useCMRenderTree(editableFragments ?? messageFragments, isEditingText && canEditText ? 'edit' : 'view', renderTreeOptions);
   const { trailingOptions } = renderTree;
 
@@ -429,14 +436,10 @@ export function ChatMessage(props: {
   const inFluxFragmentId = React.useMemo(() => messageFragmentsInFluxId(messageFragments, !!messagePendingIncomplete), [messageFragments, messagePendingIncomplete]);
 
   const fragmentFlattenedText = React.useMemo(() => messageFragmentsReduceText(messageFragments), [messageFragments]);
+  const vertexLinksCount = React.useMemo(() => fromAssistant && !messagePendingIncomplete ? vertexLinksInFragments(messageFragments).size : 0, [fromAssistant, messageFragments, messagePendingIncomplete]);
   const userPromptText = React.useMemo(() => findFirstUserPromptFragment(messageFragments)?.part.text ?? '', [messageFragments]);
   const contentFragments = React.useMemo(() => messageFragments.filter(isContentFragment), [messageFragments]);
   const handleHighlightSelText = useSelHighlighterMemo(messageId, selText, contentFragments, fromAssistant, onMessageFragmentReplace);
-
-  // [#1114] Vertex AI grounding redirect links present in this message (skip the scan while streaming - the button is gated on completion anyway)
-  const vertexLinksCount = React.useMemo(() => {
-    return fromAssistant && !messagePendingIncomplete ? vertexLinksCountInFragments(messageFragments) : 0;
-  }, [fromAssistant, messagePendingIncomplete, messageFragments]);
 
   const textSubject = selText ? selText : fragmentFlattenedText;
   const t2iSubject = selText ?? userPromptText;
@@ -455,7 +458,7 @@ export function ChatMessage(props: {
   // const wordsDiff = useWordsDifference(textSubject, props.diffPreviousText, showDiff);
 
 
-  const { onMessageAssistantFrom, onMessageDelete, onMessageContinue, onMessageToggleUserFlag, onMessageUpstreamResume, onMessageUpstreamDetach, onMessageUpstreamDelete } = props;
+  const { onMessageAssistantFrom, onMessageDelete, onMessageContinue, onMessageSetRole, onMessageToggleUserFlag, onMessageUpstreamResume, onMessageUpstreamDetach, onMessageUpstreamDelete } = props;
 
   // '+ Text': a new empty block at the end, focused; while the last block is still empty, focus that one instead
   const handleFragmentNew = React.useCallback(() => {
@@ -481,22 +484,6 @@ export function ChatMessage(props: {
     editFragments(fragments => reorderFragmentsInSlots(fragments, reorderedIds));
   }, [editFragments]);
 
-  const handleResolveVertexLinks = React.useCallback(async () => {
-    const outcome = await vertexLinksResolveFragments(messageFragments);
-    switch (outcome.status) {
-      case 'resolved':
-        for (const { fragmentId, newFragment } of outcome.resolution.changedFragments)
-          onMessageFragmentReplace?.(messageId, fragmentId, newFragment);
-        return undefined; // success
-      case 'unresolved':
-        return 'Links may have expired'; // aged out (no retry hint - retrying won't help)
-      case 'failed':
-        return 'Could not resolve - retry'; // transient: network/timeout
-      case 'none':
-        return undefined; // nothing to resolve (button shouldn't be showing)
-    }
-  }, [messageFragments, messageId, onMessageFragmentReplace]);
-
   const handleMessageContinue = React.useCallback((continueText: null | string) => {
     onMessageContinue?.(messageId, continueText);
   }, [messageId, onMessageContinue]);
@@ -518,6 +505,10 @@ export function ChatMessage(props: {
   const handleMessageDelete = React.useCallback(() => {
     onMessageDelete?.(messageId);
   }, [messageId, onMessageDelete]);
+
+  const handleMessageSetRole = React.useCallback((role: DMessageRole) => {
+    onMessageSetRole?.(messageId, role);
+  }, [messageId, onMessageSetRole]);
 
   const handleMessageUserFlagToggle = React.useCallback((flag: DMessageUserFlag, maxPerConversation?: number) => {
     onMessageToggleUserFlag?.(messageId, flag, maxPerConversation);
@@ -632,7 +623,7 @@ export function ChatMessage(props: {
   /// Message Menu (3 dots) ///
 
   const {
-    onMessageBeam, onMessageBranch, onMessageTruncate, onAddInReferenceTo,
+    onMessageBeam, onMessageBranch, onMessagePresentationChange, onMessageTruncate, onAddInReferenceTo,
     onTextDiagram, onTextImagine, onTextSpeak,
   } = props;
 
@@ -714,11 +705,11 @@ export function ChatMessage(props: {
     handleOpsMenuClose();
   }, [handleOpsMenuClose, handleEditsBegin, handleEditsCancel, isEditingText, messagePendingIncomplete]);
 
-  const handleOpsMessageViewToggle = React.useCallback((e: React.MouseEvent) => {
+  const handleOpsMessagePresentationChange = React.useCallback((e: React.MouseEvent, update: Partial<DMessagePresentation> | null) => {
     e.preventDefault();
-    setUserMarkdownFlipped(flipped => !flipped);
+    onMessagePresentationChange?.(messageId, update);
     handleOpsMenuClose();
-  }, [handleOpsMenuClose]);
+  }, [handleOpsMenuClose, messageId, onMessagePresentationChange]);
 
   const handleOpsMessageTruncate = React.useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -808,7 +799,8 @@ export function ChatMessage(props: {
 
 
   // style
-  const backgroundColor = messageBackground(messageRole, userCommandApprox, messageHasBeenEdited, false /*isAssistantError && !errorMessage*/, msgGenOutOfTokens);
+  const msgOutcomeColor = messageOutcomeColor(msgOutcome);
+  const backgroundColor = messageBackground(messageRole, userCommandApprox, messageHasBeenEdited, msgOutcomeColor === 'warning' ? 'warning' : undefined /* chat tints truncation only: errors render inline, a stop in chat is usually deliberate */);
 
   const listItemSx: SxProps = React.useMemo(() => ({
     // vars
@@ -1004,7 +996,7 @@ export function ChatMessage(props: {
             messageRole={messageRole}
             messageGeneratorLlmId={messageGenerator?.mgt === 'aix' ? messageGenerator.aix?.mId : undefined}
             messagePendingIncomplete={messagePendingIncomplete}
-            disableMarkdownText={disableMarkdown || (fromUser && !userMarkdown) /* user messages: plain text, unless Labs or this message's menu says markdown */}
+            disableMarkdownText={textMode === 'plain'}
             disableMarkdownDocuments={disableMarkdown}
             htmlRenderVariant={props.htmlRenderVariant}
 
@@ -1025,12 +1017,13 @@ export function ChatMessage(props: {
             onReattachAsFile={props.onReattachAsFile}
           />
 
-          {/* [#1114] Resolve Vertex AI grounding redirect links in place */}
-          {vertexLinksCount >= 1 && !messagePendingIncomplete && !isEditingText && !!onMessageFragmentsReplace && (
-            <BlockOpResolveLinks
+          {/* [#1114] Resolve the Vertex AI grounding redirect links in place */}
+          {vertexLinksCount > 0 && !isEditingText && !!onMessageFragmentsReplace && (
+            <BlockOpResolveVertexAILinks
               contentScaling={adjContentScaling}
+              fragments={messageFragments}
               linksCount={vertexLinksCount}
-              onResolve={handleResolveVertexLinks}
+              onFragmentReplace={handleFragmentReplace}
             />
           )}
 
@@ -1130,7 +1123,8 @@ export function ChatMessage(props: {
           isUserNotifyComplete={isUserNotifyComplete}
           userNotifyCompleteLlmId={(messageGenerator?.mgt === 'aix' ? messageGenerator.aix?.mId : undefined) ?? null}
           isUserStarred={isUserStarred}
-          isViewMarkdown={userMarkdown}
+          isViewMarkdown={textMode === 'markdown'}
+          isViewUngrouped={fragmentGrouping === 'ungrouped'}
           isVndAndCacheAuto={isVndAndCacheAuto}
           isVndAndCacheUser={isVndAndCacheUser}
           showVndAntCaching={uiComplexityMode === 'extra' && !!props.showAntPromptCaching && !isUserMessageSkipped}
@@ -1142,8 +1136,8 @@ export function ChatMessage(props: {
           onOpsBranchFrom={!onMessageBranch ? undefined : handleOpsBranchFrom}
           onOpsMessageCopySrc={handleOpsMessageCopySrc}
           onOpsMessageEditToggle={!onMessageFragmentsReplace ? undefined : handleOpsMessageEditToggle}
+          onOpsMessagePresentationChange={!onMessagePresentationChange ? undefined : handleOpsMessagePresentationChange}
           onOpsMessageTruncate={!onMessageTruncate ? undefined : handleOpsMessageTruncate}
-          onOpsMessageViewToggle={!fromUser ? undefined : handleOpsMessageViewToggle}
           onOpsShowInfo={handleOpsShowInfo}
           onOpsTextDiagram={!onTextDiagram ? undefined : handleOpsTextDiagram}
           onOpsTextImagine={!onTextImagine ? undefined : handleOpsTextImagine}
@@ -1181,6 +1175,7 @@ export function ChatMessage(props: {
           open
           onClose={handleInfoClose}
           message={props.message}
+          onRoleChange={(!onMessageSetRole || messagePendingIncomplete) ? undefined : handleMessageSetRole}
         />
       )}
 

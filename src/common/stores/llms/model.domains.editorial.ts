@@ -8,6 +8,8 @@ import type { LlmsXAIModelId } from '~/modules/llms/server/openai/models/xai.mod
 import type { LlmsZAIModelId } from '~/modules/llms/server/openai/models/zai.models';
 import type { ModelVendorId } from '~/modules/llms/vendors/vendors.registry';
 
+import { textEqualsDotDashInsensitive } from '~/common/util/textUtils';
+
 import type { DLLM, DLLMId } from './llms.types';
 import type { DModelDomainId } from './model.domains.types';
 import { getLLMPubDate, isLLMHidden, LLM_IF_Inputs_Video } from './llms.types';
@@ -23,8 +25,8 @@ import { getLLMPubDate, isLLMHidden, LLM_IF_Inputs_Video } from './llms.types';
  *
  * Type safety: each entry's `modelId` is constrained to its vendor's literal-union of
  * known model ids (auto-derived from `*.models.ts` via `LlmsXxxModelId`). Typos and
- * stale ids surface at compile time. Dynamic vendors (OpenRouter, Bedrock) use
- * `string` since their model lists are discovered at runtime.
+ * stale ids surface at compile time. Dynamic vendors (OpenRouter, Bedrock) list their
+ * models at runtime: their picks are templates over the native unions.
  */
 
 
@@ -32,13 +34,13 @@ import { getLLMPubDate, isLLMHidden, LLM_IF_Inputs_Video } from './llms.types';
  * `modelId` to that vendor's literal-union or `string` (dynamic vendors). */
 type _EditorialPick =
   | { vendor: 'anthropic',  modelId: LlmsAnthropicModelId }
-  | { vendor: 'bedrock',    modelId: `${'us.' | 'global.'}anthropic.${LlmsAnthropicModelId}${'' | '-thinking' | '-v1:0'}` }    // dynamic discovery
+  | { vendor: 'bedrock',    modelId: `${'us.' | 'global.'}anthropic.${LlmsAnthropicModelId}${'' | '-v1:0'}` }    // dynamic discovery; matched as a prefix of the listed id
   | { vendor: 'deepseek',   modelId: LlmsDeepseekModelId }
   | { vendor: 'googleai',   modelId: LlmsGeminiModelId }
   | { vendor: 'moonshot',   modelId: LlmsMoonshotModelId }
   | { vendor: 'nvidianim',  modelId: LlmsNvidiaNIMModelId }
   | { vendor: 'openai',     modelId: LlmsOpenAIModelId }
-  | { vendor: 'openrouter', modelId: `anthropic/${LlmsAnthropicModelId | 'claude-haiku-4-5'}` | `google/${string}` | `openai/${LlmsOpenAIModelId}` } // dynamic discovery
+  | { vendor: 'openrouter', modelId: `anthropic/${LlmsAnthropicModelId}` | `google/${string}` | `openai/${LlmsOpenAIModelId}` | 'openrouter/free' } // dynamic discovery
   | { vendor: 'xai',        modelId: LlmsXAIModelId }
   | { vendor: 'zai',        modelId: LlmsZAIModelId };
 
@@ -54,156 +56,85 @@ type _EditorialDefaultsTable = {
 
 // --- Editorial table ---
 // Array order IS cross-vendor precedence. Interleave freely.
+//
+// One pick per service and domain: the current model at that service level, which every user of the service can call.
+// No previous-generation fallbacks: when a pick is not in the user's list, the ELO/cost heuristic takes over.
+// - Bedrock is the exception: access is per account and region. The newest comes first, although an account without the
+//   enablement gets 403 'not available for this account' on every Claude released since Opus 4.7; the second pick is the
+//   newest such an account can invoke, and it applies only where the first is not listed.
+// - OpenRouter serves every upstream: a single pick per domain, the best across vendors. A key that cannot pay lists the
+//   priced models hidden: there the pick is 'openrouter/free', the router across the free models, last in every domain; a
+//   single free model is often rate-limited upstream (Gemma answered 8 of 70 production chats, the router 438 of 460).
+// - NVIDIA NIM is a free trial catalog: last in every domain, so that a configured paid service always wins.
+// Scores are LMArena text (style control), 2026-10-28; prices are $/M tokens, input/output.
 
 export const EditorialDefaults = {
 
+  // flagship quality
   primaryChat: [
-    // LAUNCHED 2026-09-22: claude-opus-5-5 is the top pick, ahead of Fable 5.1 ($4/$20 vs $10/$50, 1M ctx, always-on thinking, default effort medium)
-    { vendor: 'anthropic',  modelId: 'claude-opus-5-5' },
+    { vendor: 'anthropic',  modelId: 'claude-opus-5-5' }, // 1509, $4/$20, 1M ctx - above Fable 5.1 (1504) at 40% of its price
     { vendor: 'bedrock',    modelId: 'us.anthropic.claude-opus-5-5' },
     { vendor: 'bedrock',    modelId: 'global.anthropic.claude-opus-5-5' },
+    { vendor: 'bedrock',    modelId: 'us.anthropic.claude-opus-4-6' },
+    { vendor: 'bedrock',    modelId: 'global.anthropic.claude-opus-4-6' },
     { vendor: 'openrouter', modelId: 'anthropic/claude-opus-5-5' },
-    // Fable tier (hold lifted 2026-09-01; the 06-16 hold was the export-control suspension): 5.1 on the API, Bedrock stays
-    // on 5 (5.1 account-gated there), OpenRouter both. Single always-adaptive entries, so no '-thinking' suffix.
-    { vendor: 'anthropic',  modelId: 'claude-fable-5-1' },
-    { vendor: 'bedrock',    modelId: 'us.anthropic.claude-fable-5' },
-    { vendor: 'bedrock',    modelId: 'global.anthropic.claude-fable-5' },
-    { vendor: 'openrouter', modelId: 'anthropic/claude-fable-5-1' },
-    { vendor: 'openrouter', modelId: 'anthropic/claude-fable-5' },
-    // LAUNCHED 2026-07-24: claude-opus-5 replaces Opus 4.8 as the top Anthropic pick ($5/$25, 1M ctx, thinking
-    // on by default). Single always-adaptive entry (no variant), so no '-thinking' Bedrock suffix.
-    { vendor: 'anthropic',  modelId: 'claude-opus-5' },
-    { vendor: 'bedrock',    modelId: 'us.anthropic.claude-opus-5' },
-    { vendor: 'bedrock',    modelId: 'global.anthropic.claude-opus-5' },
-    { vendor: 'openrouter', modelId: 'anthropic/claude-opus-5' },
-    { vendor: 'anthropic',  modelId: 'claude-opus-4-8' },
-    { vendor: 'bedrock',    modelId: 'us.anthropic.claude-opus-4-8-thinking' },
-    { vendor: 'bedrock',    modelId: 'global.anthropic.claude-opus-4-8-thinking' },
-    { vendor: 'openrouter', modelId: 'anthropic/claude-opus-4-8' },
-    { vendor: 'anthropic',  modelId: 'claude-opus-4-7' },
-    { vendor: 'bedrock',    modelId: 'us.anthropic.claude-opus-4-7-thinking' },
-    { vendor: 'bedrock',    modelId: 'global.anthropic.claude-opus-4-7-thinking' },
-    { vendor: 'openrouter', modelId: 'anthropic/claude-opus-4-7' },
-    { vendor: 'openai',     modelId: 'gpt-6.1-sol' }, // 2026-09-29 - "near-Astra" on coding, computer use and professional work at a fifth of Astra's price ($2/$10)
-    { vendor: 'openrouter', modelId: 'openai/gpt-6.1-sol' },
-    { vendor: 'openai',     modelId: 'gpt-6-astra' }, // 2026-09-03 - new flagship; $10/$50 (2.5x Sol per token, OpenAI claims lower cost per task)
-    { vendor: 'openrouter', modelId: 'openai/gpt-6-astra' },
-    { vendor: 'openai',     modelId: 'gpt-6-sol' }, // 2026-09-22 - succeeds 5.6 Sol at half the price ($2/$10), ~1.5x its streaming speed
-    { vendor: 'openrouter', modelId: 'openai/gpt-6-sol' },
-    { vendor: 'openai',     modelId: 'gpt-5.6-sol' }, // 2026-07-09 GA - flagship tier, same price as 5.5
-    { vendor: 'openrouter', modelId: 'openai/gpt-5.6-sol' },
-    { vendor: 'openai',     modelId: 'gpt-5.5' },
-    { vendor: 'openrouter', modelId: 'openai/gpt-5.5' },
-    { vendor: 'googleai',   modelId: 'models/gemini-4-argon' }, // 2026-10-13 API GA; Elo 1525 prelim (#1), $2/$10 intro through 2026-11-30, then $4/$20
-    { vendor: 'openrouter', modelId: 'google/gemini-4-argon' },
-    { vendor: 'googleai',   modelId: 'models/gemini-3.8-flash' }, // 2026-09-02 GA - newest Flash flagship, same intro price as 3.6 (3.7 Flash, deprecated 2026-10-08, routes here)
-    { vendor: 'googleai',   modelId: 'models/gemini-3.6-flash' }, // 2026-07-21 GA - cheaper output (3.5 Flash, deprecated 2026-10-08, routes here)
-    { vendor: 'anthropic',  modelId: 'claude-opus-4-6' },
-    { vendor: 'googleai',   modelId: 'models/gemini-3.1-pro-preview' },
-    { vendor: 'anthropic',  modelId: 'claude-sonnet-5-5' }, // launched 2026-09-28
-    { vendor: 'anthropic',  modelId: 'claude-sonnet-4-6' },
-    { vendor: 'xai',        modelId: 'grok-4.7' }, // 2026-09-21 GA - larger base than 4.6, same price
-    { vendor: 'xai',        modelId: 'grok-4.6' }, // 2026-08-12 GA - frontier for coding/agentic/knowledge work, extends 4.5
-    { vendor: 'xai',        modelId: 'grok-4.5' },
-    { vendor: 'xai',        modelId: 'grok-4.3' },
-    { vendor: 'moonshot',   modelId: 'kimi-k3.1-pro' }, // 2026-10-23 GA, $2/$10, cheaper than K3
-    { vendor: 'moonshot',   modelId: 'kimi-k3' },
-    { vendor: 'moonshot',   modelId: 'kimi-k2.6' },
-    { vendor: 'zai',        modelId: 'glm-5.3' }, // 2026-08-27: standard API GA (was Coding-Plan-only at launch)
-    { vendor: 'zai',        modelId: 'glm-5.2' },
-    { vendor: 'deepseek',   modelId: 'deepseek-v4-pro' },
-    // NVIDIA NIM: free trial catalog, tail picks (native vendors above always win when configured; z-ai/glm-5.2 dropped: NVIDIA EOL 2026-08-24)
-    { vendor: 'nvidianim',  modelId: 'nvidia/nemotron-3-ultra-550b-a55b' }, // NVIDIA flagship, 1M ctx, reliably served
-    { vendor: 'nvidianim',  modelId: 'deepseek-ai/deepseek-v4.1-flash' }, // multimodal, 1M ctx (the 0731 checkpoint is 410 Gone on NVIDIA)
+    { vendor: 'googleai',   modelId: 'models/gemini-4-hydrogen' }, // $1.50/$7.50, available on free and paid keys; high thinking by default
+    { vendor: 'openai',     modelId: 'gpt-6.1-sol' }, // 1481, $2/$10 - level with 5.6 Sol (1485) and above Astra (1476, $10/$50)
+    { vendor: 'moonshot',   modelId: 'kimi-k3.1-pro' }, // $2/$10 - succeeds K3 (1488, $3/$15), no arena row of its own yet
+    { vendor: 'zai',        modelId: 'glm-5.3' }, // 1481, $1.4/$4.4
+    { vendor: 'deepseek',   modelId: 'deepseek-flash' }, // V4.1 Flash: 1476, $0.3/$1.2 - above V4 Pro (1465) at a quarter of its price
+    { vendor: 'xai',        modelId: 'grok-4.7' }, // xAI's flagship - 1441, below Grok 4.5 (1465) and 4.6 (1455)
+    { vendor: 'nvidianim',  modelId: 'nvidia/nemotron-3-ultra-550b-a55b' }, // 1427, 1M ctx
+    { vendor: 'openrouter', modelId: 'openrouter/free' },
   ],
 
+  // workhorse coder with function calling: strong, quick, mid-priced
   codeApply: [
-    { vendor: 'googleai',   modelId: 'models/gemini-3.8-flash' }, // 2026-09-02 GA - successor to 3.7 Flash ("most intelligent workhorse for coding and agents")
-    { vendor: 'openrouter', modelId: 'google/gemini-3.8-flash' },
-    { vendor: 'googleai',   modelId: 'models/gemini-3.6-flash' }, // 2026-07-21 GA - "improved code/agentic planning" + token efficiency over 3.5 Flash
-    { vendor: 'openrouter', modelId: 'google/gemini-3.6-flash' },
-    { vendor: 'openai',     modelId: 'gpt-6.1-sol' }, // 2026-09-29 - "exceptionally strong on agentic coding", same price as 6 Sol
-    { vendor: 'openai',     modelId: 'gpt-6-sol' }, // 2026-09-22 - "built for complex coding and agentic workflows"
-    { vendor: 'openai',     modelId: 'gpt-5.6-sol' }, // 2026-07-09 GA - "strongest yet for agentic coding"
-    { vendor: 'openai',     modelId: 'gpt-5.5' },
-    { vendor: 'anthropic',  modelId: 'claude-sonnet-4-6' },
+    { vendor: 'googleai',   modelId: 'models/gemini-4-hydrogen' }, // everyday coding and agentic execution; four thinking levels
+    { vendor: 'openrouter', modelId: 'google/gemini-4-hydrogen' },
+    { vendor: 'openai',     modelId: 'gpt-6.1-sol' }, // 1481, $2/$10 - "exceptionally strong on agentic coding"
+    { vendor: 'anthropic',  modelId: 'claude-sonnet-5-5' }, // 1477, $2/$10 - cheaper than Sonnet 4.6 ($3/$15), which it succeeds; thinks by default
+    { vendor: 'bedrock',    modelId: 'us.anthropic.claude-sonnet-5-5' },
+    { vendor: 'bedrock',    modelId: 'global.anthropic.claude-sonnet-5-5' },
     { vendor: 'bedrock',    modelId: 'us.anthropic.claude-sonnet-4-6' },
     { vendor: 'bedrock',    modelId: 'global.anthropic.claude-sonnet-4-6' },
-    { vendor: 'openrouter', modelId: 'anthropic/claude-sonnet-4-6' },
-    { vendor: 'anthropic',  modelId: 'claude-sonnet-5-5' }, // launched 2026-09-28 - after 4.6, which doesn't think by default
-    { vendor: 'anthropic',  modelId: 'claude-opus-5-5' }, // launched 2026-09-22
-    { vendor: 'anthropic',  modelId: 'claude-opus-5' }, // launched 2026-07-24
-    { vendor: 'anthropic',  modelId: 'claude-opus-4-8' },
-    { vendor: 'anthropic',  modelId: 'claude-opus-4-7' },
-    { vendor: 'xai',        modelId: 'grok-4.7' }, // 2026-09-21 GA - larger base than 4.6, same price
-    { vendor: 'xai',        modelId: 'grok-4.6' }, // xAI frontier for coding/agentic; new Grok Build default (2026-08-12)
-    { vendor: 'xai',        modelId: 'grok-4.5' },
-    { vendor: 'xai',        modelId: 'grok-build-0.1' },
-    { vendor: 'zai',        modelId: 'glm-5.3' }, // 2026-08-27: standard API GA; +50% over 5.2 on Z.ai's code bench
-    { vendor: 'zai',        modelId: 'glm-5.2' },
-    { vendor: 'zai',        modelId: 'glm-5' },
-    { vendor: 'moonshot',   modelId: 'kimi-k2.6' },
-    { vendor: 'deepseek',   modelId: 'deepseek-flash' },
-    // NVIDIA NIM: free trial catalog, tail picks (z-ai/glm-5.2 dropped: NVIDIA EOL 2026-08-24)
-    { vendor: 'nvidianim',  modelId: 'nvidia/nemotron-3.5-super-vl-120b-a12b' }, // agentic/tool-use tuned, 12B active (3 Super 404s for our key since 2026-10-21)
-    { vendor: 'nvidianim',  modelId: 'deepseek-ai/deepseek-v4.1-flash' },
+    { vendor: 'zai',        modelId: 'glm-5.3' }, // 1481
+    { vendor: 'deepseek',   modelId: 'deepseek-flash' }, // 1476
+    { vendor: 'moonshot',   modelId: 'kimi-k3.1-pro' }, // $2/$10 - K2.7 Code is closed to new accounts
+    { vendor: 'xai',        modelId: 'grok-4.7' },
+    { vendor: 'nvidianim',  modelId: 'nvidia/nemotron-3.5-super-vl-120b-a12b' }, // agentic and tool-use tuned
+    { vendor: 'openrouter', modelId: 'openrouter/free' },
   ],
 
+  // titles, summaries and other short utility calls: fast and cheap first
   fastUtil: [
-    // LAUNCHED 2026-10-07: GPT-6 Luna's price ($0.10/$0.50 up to 100K-token prompts), measured ~200 tok/s with thinking off vs Luna ~85 at
-    // effort none; titles in 0.4-0.8s. Thinking is on by default (Thinking switch), but short utility prompts mostly skip it at 'medium'.
-    { vendor: 'anthropic',  modelId: 'claude-haiku-5-5' },
+    { vendor: 'anthropic',  modelId: 'claude-haiku-5-5' }, // measured ~200 tok/s with thinking off, titles in 0.4-0.8s; short prompts mostly skip thinking
     { vendor: 'bedrock',    modelId: 'us.anthropic.claude-haiku-5-5' },
     { vendor: 'bedrock',    modelId: 'global.anthropic.claude-haiku-5-5' },
-    { vendor: 'openrouter', modelId: 'anthropic/claude-haiku-5-5' },
-    { vendor: 'openai',     modelId: 'gpt-6-luna' }, // 2026-09-22 - half 5.6 Luna's price ($0.10/$0.50), streamed faster side by side (~117 vs ~92 tok/s)
-    { vendor: 'openrouter', modelId: 'openai/gpt-6-luna' },
-    { vendor: 'openai',     modelId: 'gpt-5.6-luna' }, // 2026-07-09 GA - measured ~160 tok/s (faster than 5.4-mini), 1M ctx, $0.20/$1.20
-    { vendor: 'openrouter', modelId: 'openai/gpt-5.6-luna' },
-    { vendor: 'openai',     modelId: 'gpt-5.4-mini' },
-    { vendor: 'openrouter', modelId: 'openai/gpt-5.4-mini' },
-    { vendor: 'googleai',   modelId: 'models/gemini-3.5-flash-lite' }, // 2026-07-21 GA - "low-latency subagent for high-volume automation" (Elo 1459 vs 3.1FL's 1432; slightly pricier at $0.30/$2.50 vs $0.25/$1.50)
-    { vendor: 'openrouter', modelId: 'google/gemini-3.5-flash-lite' },
-    { vendor: 'googleai',   modelId: 'models/gemini-3.1-flash-lite' },
-    { vendor: 'openrouter', modelId: 'google/gemini-3.1-flash-lite' },
-    { vendor: 'googleai',   modelId: 'models/gemini-2.5-flash-lite' }, // deprecated 2026-07-22, kept as deep fallback
-    { vendor: 'anthropic',  modelId: 'claude-haiku-4-5-20251001' },
     { vendor: 'bedrock',    modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0' },
     { vendor: 'bedrock',    modelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0' },
-    { vendor: 'openrouter', modelId: 'anthropic/claude-haiku-4-5' },
-    { vendor: 'moonshot',   modelId: 'kimi-k2.5' },
-    { vendor: 'xai',        modelId: 'grok-4.20-0309-non-reasoning' },
-    { vendor: 'xai',        modelId: 'grok-4.3' },
-    { vendor: 'zai',        modelId: 'glm-5.3-flash' }, // 2026-08-27: 18B active, $0.15/$0.5 - the actual Z.ai fast tier (5.2 was a pre-flash placeholder)
-    { vendor: 'zai',        modelId: 'glm-5.2' },
-    { vendor: 'deepseek',   modelId: 'deepseek-flash' },
-    // NVIDIA NIM: free trial catalog, tail pick (gpt-oss-20b dropped: invokes time out since 2026-10-21)
-    { vendor: 'nvidianim',  modelId: 'nvidia/nemotron-3.5-lightning-30b-a3b' }, // fastest Nemotron MoE, 3B active, 1M ctx
+    { vendor: 'openrouter', modelId: 'anthropic/claude-haiku-5-5' },
+    { vendor: 'openai',     modelId: 'gpt-6-luna' }, // $0.10/$0.50, measured ~117 tok/s
+    { vendor: 'googleai',   modelId: 'models/gemini-3.5-flash-lite' }, // 1456, $0.30/$2.50 - "low-latency subagent for high-volume automation"
+    { vendor: 'zai',        modelId: 'glm-5.3-flash' }, // 1477, $0.15/$0.5
+    { vendor: 'deepseek',   modelId: 'deepseek-flash' }, // $0.3/$1.2
+    { vendor: 'moonshot',   modelId: 'kimi-k3.1-pro-highspeed' }, // $4/$20, measured titles in 1.3-1.6s; K2.6 is closed to new accounts
+    { vendor: 'xai',        modelId: 'grok-4.20-0309-non-reasoning' }, // non-reasoning: no thinking delay
+    { vendor: 'nvidianim',  modelId: 'nvidia/nemotron-3.5-lightning-30b-a3b' }, // fastest Nemotron, 3B active
+    { vendor: 'openrouter', modelId: 'openrouter/free' },
   ],
 
+  // describes an attached image as text: vision, quick
   imageCaption: [
-    { vendor: 'googleai',   modelId: 'models/gemini-3.8-flash' }, // 2026-09-02 GA - vision (text/image/video/audio/PDF in), same intro price as 3.6
+    { vendor: 'googleai',   modelId: 'models/gemini-3.8-flash' }, // text, image, video, audio and PDF in
     { vendor: 'openrouter', modelId: 'google/gemini-3.8-flash' },
-    { vendor: 'googleai',   modelId: 'models/gemini-3.6-flash' }, // 2026-07-21 GA - vision
-    { vendor: 'openrouter', modelId: 'google/gemini-3.6-flash' },
-    { vendor: 'anthropic',  modelId: 'claude-sonnet-4-6' },
-    { vendor: 'anthropic',  modelId: 'claude-sonnet-5-5' }, // launched 2026-09-28 - after 4.6, which doesn't think by default
-    { vendor: 'anthropic',  modelId: 'claude-opus-5-5' }, // launched 2026-09-22
-    { vendor: 'anthropic',  modelId: 'claude-opus-5' }, // launched 2026-07-24
-    { vendor: 'anthropic',  modelId: 'claude-opus-4-8' },
-    { vendor: 'anthropic',  modelId: 'claude-opus-4-7' },
-    { vendor: 'anthropic',  modelId: 'claude-haiku-5-5' }, // launched 2026-10-07 - vision (text and images in)
-    { vendor: 'openrouter', modelId: 'anthropic/claude-sonnet-4-6' },
-    { vendor: 'openai',     modelId: 'gpt-6-luna' }, // 2026-09-22 - vision
-    { vendor: 'openrouter', modelId: 'openai/gpt-6-luna' },
-    { vendor: 'openai',     modelId: 'gpt-5.6-luna' }, // 2026-07-09 GA - vision, faster and a generation newer than 5.4-mini
-    { vendor: 'openrouter', modelId: 'openai/gpt-5.6-luna' },
-    { vendor: 'openai',     modelId: 'gpt-5.4-mini' },
-    { vendor: 'openrouter', modelId: 'openai/gpt-5.4-mini' },
-    // NVIDIA NIM: free trial catalog, tail picks (nemotron-nano-12b-v2-vl dropped: NVIDIA EOL 2026-08-25)
-    { vendor: 'nvidianim',  modelId: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning' }, // omni-modal Nano: image, video and audio in
-    { vendor: 'nvidianim',  modelId: 'meta/muse-glimmer-30b' }, // replaces mistral-medium-3.5-128b (410 Gone on NVIDIA since 2026-08-17)
+    { vendor: 'anthropic',  modelId: 'claude-sonnet-5-5' },
+    { vendor: 'openai',     modelId: 'gpt-6-luna' },
+    { vendor: 'nvidianim',  modelId: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning' }, // image, video and audio in
+    { vendor: 'openrouter', modelId: 'openrouter/free' },
   ],
+
+  scratchChat: [],
 
 } as const satisfies _EditorialDefaultsTable;
 
@@ -213,24 +144,39 @@ export const EditorialDefaults = {
 /**
  * Pick the editor's favorite for a domain, given pre-filtered candidates.
  *
- * Walks `EditorialDefaults[domainId]` in declared order and returns the first DLLMId
- * matching a (vendor, modelId) pair. Returns undefined when nothing matches; the
- * caller (auto-resolver) falls through to the ELO/cost strategy.
+ * Walks `EditorialDefaults[domainId]` for each of `domainIds` in order, each in declared
+ * order, and returns the first visible DLLMId matching a (vendor, modelId) pair. Returns undefined
+ * when nothing matches; the caller (auto-resolver) falls through to the ELO/cost strategy.
  */
-export function llmsEditorialPickForDomain(
-  domainId: DModelDomainId,
-  filteredLlms: ReadonlyArray<DLLM>,
-  fallbackEditorialDomainId?: DModelDomainId, // optional secondary domain to check when the primary domain has no picks or no matches
+export function llmsEditorial_ModelIdForDomain_SLOW<Tllm extends Pick<DLLM, 'id' | 'vId' | 'initialParameters' | 'hidden' | 'userHidden'>>(
+  domainIds: ReadonlyArray<DModelDomainId>,
+  universe: ReadonlyArray<Tllm>,
 ): DLLMId | undefined {
-  const entries = EditorialDefaults[domainId]?.length ? EditorialDefaults[domainId]
-    : fallbackEditorialDomainId && EditorialDefaults[fallbackEditorialDomainId]?.length ? EditorialDefaults[fallbackEditorialDomainId]
-      : undefined;
-  if (!entries) return undefined;
-  for (const { vendor, modelId } of entries) {
-    // exact first: the prefix rule would otherwise take OpenRouter's 'openai/gpt-6-luna-pro' (listed first) for 'openai/gpt-6-luna'
-    const hit = filteredLlms.find(llm => llm.vId === vendor && llm.initialParameters?.llmRef === modelId)
-      ?? filteredLlms.find(llm => llm.vId === vendor && _editorialMatch(llm, modelId));
-    if (hit) return hit.id;
+  for (const domainId of domainIds) {
+    for (const { vendor, modelId } of EditorialDefaults[domainId] ?? []) {
+
+      // exact first: match by (vendor, id)
+      let relaxedLlm: Tllm | undefined;
+      const exactLlm = universe.find((llm) => {
+        // hidden models are never picked, as in the ELO/cost strategies: the listing hides what a user should not get by
+        // default (e.g. what an OpenRouter key cannot pay for), and a user's own show or hide choice overrides it
+        if (llm.vId !== vendor || isLLMHidden(llm)) return false;
+
+        const llmRef = llm.initialParameters?.llmRef;
+        if (!llmRef || typeof llmRef !== 'string') return false;
+
+        // exact match
+        if (llmRef === modelId) return true;
+
+        // relaxed after: the prefix rule would otherwise take OpenRouter's 'openai/gpt-6-luna-pro' (listed first) for 'openai/gpt-6-luna';
+        // first relaxed hit wins: dated-suffix prefix, or dot/dash-equivalent (OpenRouter's 'claude-opus-4.8' vs our 'claude-opus-4-8')
+        if (!relaxedLlm && (llmRef.startsWith(modelId) || textEqualsDotDashInsensitive(llmRef, modelId)))
+          relaxedLlm = llm;
+        return false; // keep looking for an exact match
+      });
+      if (exactLlm) return exactLlm.id;
+      if (relaxedLlm) return relaxedLlm.id;
+    }
   }
   return undefined;
 }
@@ -268,13 +214,4 @@ function _isGeminiFamily(llm: DLLM): boolean {
   if (llm.vId === 'googleai') return true;
   const llmRef = llm.initialParameters?.llmRef;
   return typeof llmRef === 'string' && llmRef.toLowerCase().includes('gemini');
-}
-
-
-/** Tolerant id match: exact `llmRef`, dated-suffix prefix on `llmRef`, or dot/dash-equivalent (OpenRouter's 'claude-opus-4.8' vs our 'claude-opus-4-8'). */
-function _editorialMatch(llm: DLLM, editorialId: string): boolean {
-  const llmRef = llm.initialParameters?.llmRef;
-  return typeof llmRef === 'string' && (llmRef === editorialId || llmRef.startsWith(editorialId) || llmRef.replace(/\./g, '-') === editorialId.replace(/\./g, '-'));
-  // this would match the mdoel in alternative services I guess - but also notice we use the llmRef correctly, not the DLLMId
-  // return llm.id === editorialId || llm.id.endsWith(`-${editorialId}`);
 }

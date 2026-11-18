@@ -17,6 +17,7 @@ interface FolderState {
   folders: DFolder[];
   enableFolders: boolean; // user setting - default to off until we get enough feedback
   updatedAt: number;
+  activeFolderId: string | null; // the folder selected in the chat drawer, where new and branched chats are added - not persisted
 }
 
 interface FolderActions {
@@ -31,6 +32,7 @@ interface FolderActions {
   removeConversationFromAll: (conversationId: DConversationId) => void;
   removeConversationFromFolder: (folderId: string, conversationId: DConversationId) => void;
   toggleEnableFolders: () => void;
+  setActiveFolderId: (folderId: string | null) => void;
 }
 
 type FolderStore = FolderState & FolderActions;
@@ -52,6 +54,7 @@ export const useFolderStore = create<FolderStore>()(/*devtools(*/
         folders: [],
         enableFolders: false,
         updatedAt: 0,
+        activeFolderId: null,
 
         // Actions
       importFoldersAppend: (folders: DFolder[], enableFolders: boolean) =>
@@ -152,6 +155,8 @@ export const useFolderStore = create<FolderStore>()(/*devtools(*/
         enableFolders: !state.enableFolders,
       })),
 
+      setActiveFolderId: (folderId: string | null) => _set({ activeFolderId: folderId }),
+
       };
     },
     {
@@ -160,6 +165,8 @@ export const useFolderStore = create<FolderStore>()(/*devtools(*/
         if (!state) return;
         void startFolderSync();
       },
+      // The active folder is session state; updatedAt is needed for cloud sync.
+      partialize: ({ folders, enableFolders, updatedAt }) => ({ folders, enableFolders, updatedAt }),
     },
   ),
 );
@@ -201,4 +208,12 @@ export function getRotatingFolderColor(): string {
  */
 export function chatFoldersActions(): Readonly<FolderActions> {
   return useFolderStore.getState();
+}
+
+/**
+ * The folder selected in the chat drawer, if folders are enabled and it still exists. For actions: read when they run.
+ */
+export function getChatActiveFolderId(): string | null {
+  const { activeFolderId, enableFolders, folders } = useFolderStore.getState();
+  return (enableFolders && activeFolderId && folders.some(folder => folder.id === activeFolderId)) ? activeFolderId : null;
 }

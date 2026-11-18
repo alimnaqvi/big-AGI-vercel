@@ -15,6 +15,27 @@ export function llmsFixupHost(host: string, apiPath: string): string {
 }
 
 /**
+ * The URL of an API call on a host a user can set. `host` is fixed up already (llmsFixupHost); `apiPath` is the vendor's
+ * path from the server root, e.g. '/v1/chat/completions', '/api/tags'.
+ *
+ * A host may end in an API version (.../v1, .../v2, .../paas/v4, .../v1beta): the base URL, as SDKs and vendor docs give it.
+ * - a path that starts with a version takes the host's in place of its own: '.../v2' + '/v1/models' -> '.../v2/models'
+ * - a path from the server root drops the host's version: '.../v1' + '/api/tags' -> '.../api/tags'
+ * A host that does not end in a version takes the path as it is.
+ */
+export function llmsApiUrl(host: string, apiPath: string): string {
+  const hostVersion = _HOST_VERSION_RE.exec(host);
+  if (!hostVersion)
+    return host + apiPath;
+  const pathVersion = _PATH_VERSION_RE.exec(apiPath);
+  return pathVersion ? host + pathVersion[1] : hostVersion[1] + apiPath;
+}
+
+// an API version is a whole path segment: v1, v2, v1beta, v1alpha, v1beta1. In a host it follows something: 'https://v2' is a hostname
+const _HOST_VERSION_RE = /^(.*[^/])\/v\d+(?:(?:alpha|beta)\d*)?$/;
+const _PATH_VERSION_RE = /^\/v\d+(?:(?:alpha|beta)\d*)?(\/.*)$/;
+
+/**
  * Safely check if a host URL's hostname matches the expected hostname.
  * Prevents DNS spoofing where hosts like "api.openai.com.evil.com" pass naive `.includes()` checks.
  */

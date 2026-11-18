@@ -10,16 +10,25 @@ Architecture and system documentation is available in the `/kb/` knowledge base,
 
 ### Modules Documentation
 
+#### Blocks - Fenced code pre-pass
+- **[BLOCKS-fence-parser.md](modules/BLOCKS-fence-parser.md)** - the opener rule and why it is a loop predicate (WebKit lookbehind cost), the corpus and its promotion rule, measured alternatives, open rows (#983 close side, CRLF, containers)
+
 #### Chat - Message rendering
 - **[CHAT-render-tree.md](modules/CHAT-render-tree.md)** - the render tree behind ChatMessage: rules in force (citation hoist, fused runs, tool pairing, edit mode shape, key continuity, layout), open work (attachments editor, edit session, block reordering, citation-split text), known limits
 
 #### Trade - Export and Import
 - **[TRADE-claude-code-export.md](modules/TRADE-claude-code-export.md)** - export for Claude Code: session and chat folder formats, measured Claude Code resume behavior, gaps
 
+#### News - What's New and the Docs Reader
+- **[NEWS.md](modules/NEWS.md)** - What's New (changelog, announcements), the per-user seen index, the build window, indicators, the docs reader and its search, the remote-feeds switch, the codeline seam, the dev rewind; open actions and the inventory of what it replaces
+
 #### AIX - AI Communication Framework
 - **[AIX.md](modules/AIX.md)** - AIX streaming architecture documentation
+- **[aix/AIX-TODO-*.md](modules/aix/)** - planned AIX work, one input file per topic; [AIX-TODO-openai-context-compaction.md](modules/aix/AIX-TODO-openai-context-compaction.md): hosted-tool loops that outgrow the context window (#1211)
 - **[AIX-ingestion.md](modules/AIX-ingestion.md)** - lossless parse/reassembly rule, checklist of open conflicts
 - **[AIX-callers-analysis.md](modules/AIX-callers-analysis.md)** - Analysis of AIX entry points, call chains, common and different rendering, error handling, etc.
+- **[AIX-outcome.md](modules/AIX-outcome.md)** - how a generation ended: the four outcomes (completed, truncated, failed, aborted), one derivation from the stored message, the wire stop-reason table, colors, Beam status, what is not done
+- **[AIX-transport-errors.md](modules/AIX-transport-errors.md)** - how a broken connection surfaces on the tRPC and CSF paths: measured browser texts, classification per event, Vercel's 300s kill and the Stop leak, tRPC stream-close history, open issues
 - **[AIX-anthropic-code-execution.md](modules/AIX-anthropic-code-execution.md)** - Anthropic code execution: the three triggers + one container, the #1087 single-environment history, empirically-verified behavior (version-pin/400, coexist, container continuity), the shipped standalone Sandbox toggle + container decoupling, and the forward Sandbox/execution-environment direction
 
 #### CSF - Client-Side Fetch

@@ -10,10 +10,13 @@
  */
 
 import * as z from 'zod/v4';
+import { TRPCError } from '@trpc/server';
 
 import { fetchJsonOrTRPCThrow, fetchResponseOrTRPCThrow } from '~/server/trpc/trpc.router.fetchers';
 
 import { modelPickOrAuto } from '~/common/util/modelPickUtils';
+
+import { llmsApiUrl } from '~/modules/llms/shared/llm.isomorphic';
 
 import type { SpeexSpeechParticle, SpeexWire_Access_Inworld, SpeexWire_ListVoices_Output } from './rpc.wiretypes';
 import type { SynthesizeBackendFn } from './synthesize.core';
@@ -271,7 +274,7 @@ export async function listVoicesInworld(access: SpeexWire_Access_Inworld): Promi
 function _inworldAccess(access: SpeexWire_Access_Inworld, apiPath: string): { headers: HeadersInit; url: string } {
   const apiKey = (access.apiKey || '').trim();
   if (!apiKey)
-    throw new Error('Missing Inworld API key');
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing Inworld API key' });
 
   let host = (access.apiHost || 'api.inworld.ai').trim();
   if (!host.startsWith('http'))
@@ -284,6 +287,6 @@ function _inworldAccess(access: SpeexWire_Access_Inworld, apiPath: string): { he
       'Authorization': `Basic ${apiKey}`, // Inworld API key is already base64-encoded
       'Content-Type': 'application/json',
     },
-    url: host + apiPath,
+    url: llmsApiUrl(host, apiPath),
   };
 }

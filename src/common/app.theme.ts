@@ -1,9 +1,24 @@
 import createCache, { StylisElement, StylisPlugin } from '@emotion/cache';
 
-import { Inter, JetBrains_Mono } from 'next/font/google';
-import { extendTheme } from '@mui/joy';
+import { extendTheme, PaletteRange } from '@mui/joy';
 
 import { animationEnterBelow, animationOpacityFadeIn } from '~/common/util/animUtils';
+import { fontFamilyInterCss, fontFamilyJetBrainsMonoCss } from '~/common/styles/fonts/app.fonts';
+import { joyWindowManagerDefaults } from '~/common/components/dnd-window/joyWindowManager';
+
+
+// TypeScript module augmentation for the custom 'accent' (brand lime) palette
+declare module '@mui/joy/styles' {
+  // noinspection JSUnusedGlobalSymbols
+  interface ColorPalettePropOverrides {
+    accent: true; // enables color='accent' on all Joy UI components
+  }
+
+  // noinspection JSUnusedGlobalSymbols
+  interface Palette {
+    accent: PaletteRange;
+  }
+}
 
 
 // Definitions
@@ -15,23 +30,10 @@ export type ContentScaling = 'xs' | 'sm' | 'md';
 export const hideOnMobile = { display: { xs: 'none', md: 'flex' } };
 
 
-// Theme & Fonts
+// Theme & Fonts - weights 400 (default), 500 (md), 600 (lg), 700 (xl); 300 (sm) is not loaded
 
-const font = Inter({
-  weight: [ /* '300', sm */ '400' /* (undefined, default) */, '500' /* md */, '600' /* lg */, '700' /* xl */],
-  subsets: ['latin'],
-  display: 'swap',
-  fallback: ['Helvetica', 'Arial', 'sans-serif'],
-});
-export const themeFontFamilyCss = font.style.fontFamily;
-
-const jetBrainsMono = JetBrains_Mono({
-  weight: ['400', '500', '600', '700'],
-  subsets: ['latin'],
-  display: 'swap',
-  fallback: ['monospace'],
-});
-export const themeCodeFontFamilyCss = jetBrainsMono.style.fontFamily;
+export const themeFontFamilyCss = fontFamilyInterCss;
+export const themeCodeFontFamilyCss = fontFamilyJetBrainsMonoCss;
 
 /**
  * Hotter lime for 'New'/'Beta' badges - intentionally brighter than the 400 brand anchor
@@ -39,6 +41,34 @@ export const themeCodeFontFamilyCss = jetBrainsMono.style.fontFamily;
  * RankingsSection chipNew - keep the two in sync.
  */
 export const brandLimeExtraBadge = '#d4ff3a';
+
+
+/**
+ * Brand 'accent' (lime) color scale, shared by both color schemes.
+ * OKLCH ramp (2026-07-08): brand #d5ec31 at 400, hue ~117 -> 120.5 olive drift, chroma
+ * peaking at the anchor, deep darks. Job steps: 100 light soft bg, 400 solid bg (both
+ * schemes), 500 hover, 600 active + light borders, 700 light-mode text (5.05:1 AA on
+ * white), 900 dark-mode deep surface.
+ * This is the source of truth for the brand lime - update website/src/theme.ts to match.
+ * Channels auto-derive mainChannel <- 500 (light) / 400 (dark), lightChannel <- 200,
+ * darkChannel <- 700; the light scheme OVERRIDES mainChannel to 700 (see palette) since
+ * Typography/Link render a variant-less color= as rgba(mainChannel / 1).
+ */
+const _accentLimeScale = {
+  50: '#f7fde2',
+  100: '#eff9c7',  // light softBg
+  200: '#e6f5a3',
+  300: '#ddf175',
+  400: '#d5ec31',  // lime - THE primary brand accent (solid bg in both schemes)
+  500: '#c4db28',  // hover
+  600: '#a7bd1e',  // active, light-mode borders
+  700: '#667600',  // light-mode text (5.05:1 on white)
+  800: '#435000',
+  900: '#242c03',  // dark-mode deep soft surface
+} as const;
+
+/** Brand lime (accent 400) as a hex string, for where a CSS variable cannot reach (canvas fills, hex-alpha suffixes); elsewhere use the Joy 'accent' palette */
+export const brandLime = _accentLimeScale[400];
 
 
 export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
@@ -74,6 +104,41 @@ export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
           // Former
           // body: 'var(--joy-palette-neutral-400, #9FA6AD)',
         },
+        // 'accent': brand lime - light: step-based tints (softBg 100 family), olive 700
+        // text, brand 400 solid; disabled tokens follow Joy defaults for uniformity
+        accent: {
+          ..._accentLimeScale,
+          // Typography/Link render variant-less color= as rgba(mainChannel / 1); auto
+          // derivation would pick 500 (an unreadable light lime on white) - pin to 700
+          mainChannel: '102 118 0',
+          // solid: the brand CTA - lime surface, black text (~16:1)
+          solidColor: '#000',
+          solidBg: 'var(--joy-palette-accent-400)',
+          solidHoverBg: 'var(--joy-palette-accent-500)',
+          solidActiveBg: 'var(--joy-palette-accent-600)',
+          solidDisabledColor: 'var(--joy-palette-neutral-400)',
+          solidDisabledBg: 'var(--joy-palette-neutral-100)',
+          // soft: pale-lime step tints, deep-olive text (800: one notch darker than the
+          // 700 text step, for contrast on the tinted bg)
+          softColor: 'var(--joy-palette-accent-800)',
+          softBg: 'var(--joy-palette-accent-100)',
+          softHoverBg: 'var(--joy-palette-accent-200)',
+          softActiveBg: 'var(--joy-palette-accent-300)',
+          softDisabledColor: 'var(--joy-palette-neutral-400)',
+          softDisabledBg: 'var(--joy-palette-neutral-50)',
+          // outlined: olive text, mid-lime border
+          outlinedColor: 'var(--joy-palette-accent-700)',
+          outlinedBorder: 'var(--joy-palette-accent-600)',
+          outlinedHoverBg: 'var(--joy-palette-accent-100)',
+          outlinedActiveBg: 'var(--joy-palette-accent-200)',
+          outlinedDisabledColor: 'var(--joy-palette-neutral-400)',
+          outlinedDisabledBorder: 'var(--joy-palette-neutral-200)',
+          // plain
+          plainColor: 'var(--joy-palette-accent-700)',
+          plainHoverBg: 'var(--joy-palette-accent-100)',
+          plainActiveBg: 'var(--joy-palette-accent-200)',
+          plainDisabledColor: 'var(--joy-palette-neutral-400)',
+        },
       },
     },
     dark: {
@@ -91,6 +156,39 @@ export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
           level2: 'var(--joy-palette-neutral-800, #171A1C)',
           body: '#060807',
           // Former: popup > surface [900] > level 1 [black], level 2 [800] > body [black]
+        },
+        // 'accent': brand lime - dark: the lime-on-black look - vivid 400 text everywhere
+        // (mainChannel auto-derives from 400, correct as-is), translucent lime glows for
+        // soft/hover (alt: an opaque accent-900 softBg reads calmer on large alerts/sheets)
+        accent: {
+          ..._accentLimeScale,
+          // solid: the brand CTA - lime surface, black text
+          solidColor: '#000',
+          solidBg: 'var(--joy-palette-accent-400)',
+          solidHoverBg: 'var(--joy-palette-accent-500)',
+          solidActiveBg: 'var(--joy-palette-accent-600)',
+          solidDisabledColor: 'var(--joy-palette-neutral-500)',
+          solidDisabledBg: 'var(--joy-palette-neutral-800)',
+          // soft: translucent lime glow (channel token: dark mainChannel derives from 400,
+          // the brand), vivid lime text
+          softColor: 'var(--joy-palette-accent-400)',
+          softBg: 'rgba(var(--joy-palette-accent-mainChannel, 213 236 49) / 0.08)',
+          softHoverBg: 'rgba(var(--joy-palette-accent-mainChannel, 213 236 49) / 0.28)',
+          softActiveBg: 'rgba(var(--joy-palette-accent-mainChannel, 213 236 49) / 0.36)',
+          softDisabledColor: 'var(--joy-palette-neutral-500)',
+          softDisabledBg: 'transparent',
+          // outlined: vivid lime text, mid-lime border
+          outlinedColor: 'var(--joy-palette-accent-400)',
+          outlinedBorder: 'var(--joy-palette-accent-600)',
+          outlinedHoverBg: 'rgba(var(--joy-palette-accent-mainChannel, 213 236 49) / 0.08)',
+          outlinedActiveBg: 'rgba(var(--joy-palette-accent-mainChannel, 213 236 49) / 0.16)',
+          outlinedDisabledColor: 'var(--joy-palette-neutral-500)',
+          outlinedDisabledBorder: 'var(--joy-palette-neutral-700)',
+          // plain
+          plainColor: 'var(--joy-palette-accent-400)',
+          plainHoverBg: 'rgba(var(--joy-palette-accent-mainChannel, 213 236 49) / 0.08)',
+          plainActiveBg: 'rgba(var(--joy-palette-accent-mainChannel, 213 236 49) / 0.16)',
+          plainDisabledColor: 'var(--joy-palette-neutral-500)',
         },
       },
     },
@@ -143,6 +241,7 @@ export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
     // },
 
     JoyModal: {
+      defaultProps: joyWindowManagerDefaults,
       styleOverrides: {
         backdrop: uiComplexityMinimal ? {
           backdropFilter: 'none', // always un-blur on minimal
@@ -151,6 +250,9 @@ export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
           animation: `${animationOpacityFadeIn} 0.16s ease-out`,
         },
       },
+    },
+    JoyDrawer: {
+      defaultProps: joyWindowManagerDefaults,
     },
     JoyModalDialog: {
       styleOverrides: {
@@ -281,9 +383,15 @@ const isBrowser = typeof document !== 'undefined';
 const emotionStylisPlugins: StylisPlugin[] = [
 
   /**
-   * 1. remove the default prefixer plugin: probably not needed and bloating
+   * 1. not the stock prefixer plugin (bloating): only the -webkit- prefixes the browser floor still needs -
+   * backdrop-filter until Safari 18, mask-image until Chrome 120, user-select on every Safari.
+   * Also covers Joy's own styles, e.g. the Modal backdrop blur and userSelect: 'none' on Button.
    */
   // prefixer,
+  function prefixFloorDeclarations(element: StylisElement) {
+    if (element.type === 'decl' && (element.props === 'backdrop-filter' || element.props === 'mask-image' || element.props === 'user-select'))
+      element.return = `-webkit-${element.value}${element.value}`; // a declaration's value is the whole 'prop:value;'
+  },
 
   /**
    * 2. add a function to remove wide-matching CSS rules from Joy UI.

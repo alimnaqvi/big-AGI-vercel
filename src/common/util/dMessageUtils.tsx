@@ -16,6 +16,7 @@ import { t2iIsPainterName } from '~/modules/t2i/t2i.config';
 
 import type { MetricsChatGenerateCost_Md } from '~/common/stores/metrics/metrics.chatgenerate';
 import type { DMessage, DMessageGenerator, DMessageRole } from '~/common/stores/chat/chat.message';
+import { messageOutcomeLabel } from '~/common/stores/chat/chat.message.outcome';
 import type { UIComplexityMode } from '~/common/app.theme';
 import { PhPaintBrush } from '~/common/components/icons/phosphor/PhPaintBrush';
 import { animationColorRainbow } from '~/common/util/animUtils';
@@ -88,26 +89,20 @@ export const tooltipMetricsGridSx: SxProps = {
 };
 
 
-/** Whole message background color, based on the message role and state */
-export function messageBackground(messageRole: DMessageRole | string, userCommand: 'draw' | 'react' | false, wasEdited: boolean, isAssistantIssue: boolean, isAssistantOutOfTokens: boolean): string {
+/** Whole message background color, based on the message role and state. assistantColor: the outcome's palette key (messageOutcomeColor), undefined for none */
+export function messageBackground(messageRole: DMessageRole | string, userCommand: 'draw' | 'react' | false, wasEdited: boolean, assistantColor: 'danger' | 'warning' | 'neutral' | undefined): string {
   switch (messageRole) {
     case 'user':
       return userCommand === 'draw' ? 'warning.softActiveBg'
         : userCommand === 'react' ? 'success.softHoverBg'
           : 'primary.plainHoverBg'; // was .background.level1
     case 'assistant':
-      const issueColor = messageIssueColor(isAssistantIssue, isAssistantOutOfTokens);
-      return issueColor ? `${issueColor}.softBg` : 'background.surface';
+      return assistantColor ? `${assistantColor}.softBg` : 'background.surface';
     case 'system':
       return wasEdited ? 'warning.softHoverBg' : 'neutral.softBg';
     default:
       return '#ff0000';
   }
-}
-
-/** Issue state -> Joy palette key: errors are danger, out-of-tokens is warning. Chat backgrounds, Beam cards and notices all color from this. */
-export function messageIssueColor(hasError: boolean, isOutOfTokens: boolean): 'danger' | 'warning' | undefined {
-  return hasError ? 'danger' : isOutOfTokens ? 'warning' : undefined;
 }
 
 
@@ -418,13 +413,13 @@ export function prettyTokenStopReason(reason: DMessageGenerator['tokenStopReason
   if (!reason) return null;
   switch (reason) {
     case 'client-abort':
-      return complexity !== 'minimal' ? 'Stopped' : '';
+      return complexity !== 'minimal' ? messageOutcomeLabel('aborted') : '';
     case 'filter':
       return 'Filtered';
     case 'issue':
       return complexity === 'extra' ? 'Error' : '';
     case 'out-of-tokens':
-      return 'Out of tokens';
+      return messageOutcomeLabel('truncated');
     default:
       const _exhaustiveCheck: never = reason;
       return null;
@@ -582,7 +577,7 @@ export function prettyShortChatModelName(model: string | undefined): string {
     return model
       .replace(/^cohere[/-]/, '')                // strip aggregator prefix (e.g. openrouter 'cohere/...')
       .replace(/-\d{2}-20\d{2}$/, '')            // strip -MM-YYYY snapshot date (e.g. -05-2026)
-      .replace('north-mini-code-1-0', 'North Mini Code')
+      .replace(/north-mini-code-1[.-]0/, 'North Mini Code')
       .replace('c4ai-', '')                      // Aya research prefix
       .replace('command-r-plus', 'Command R+')
       .replace('command-r7b', 'Command R7B')
@@ -652,6 +647,8 @@ function _prettyGeminiModelName(cutModel: string): string {
     .replace('max', 'Max')
     .replace('lite', 'Lite')
     .replace('argon', 'Argon') // Gemini 4 tier name
+    .replace('carbon', 'Carbon')
+    .replace('hydrogen', 'Hydrogen')
     .replace(/(\d)b\b/g, '$1B') // size token: '31b' -> '31B' (e.g. Gemma 4 31B)
     // feature variants
     .replace('robotics er', 'Robotics')

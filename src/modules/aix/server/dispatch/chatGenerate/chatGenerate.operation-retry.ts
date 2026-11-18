@@ -1,4 +1,4 @@
-import { upstreamRetryBackoffMs, upstreamRetryProfile } from '~/server/trpc/trpc.fetchers.retrier';
+import { RetryAttempt, upstreamRetryBackoffMs, upstreamRetryProfile } from '~/server/trpc/trpc.fetchers.retrier';
 import { delayOrAbort } from '~/common/util/abortUtils';
 
 import type { AixWire_Particles } from '../../api/aix.wiretypes';
@@ -45,7 +45,7 @@ export class OperationRetrySignal extends Error {
  * Retries entire operation when OperationRetrySignal is thrown (e.g., Anthropic overloaded_error).
  *
  * The attempt budget depends on the class of the error (see RETRY_PROFILES), which is only
- * known when the parser classifies it: hence parsers ask `hasRetriesForHttpStatus(causeHttp)` before throwing, and otherwise
+ * known when the parser classifies it: hence parsers ask `hasRetriesForHttpStatus(causeHttp, causeConn)` before throwing, and otherwise
  * surface the error themselves, with their own wording and log level.
  */
 export async function* executeChatGenerateWithOperationRetry(
@@ -55,9 +55,9 @@ export async function* executeChatGenerateWithOperationRetry(
 ): AsyncGenerator<AixWire_Particles.ChatGenerateOp, void> {
 
   let attemptNumber = 1;
-  const maxAttemptsFor = (causeHttp?: number) => AIX_DISABLE_OPERATION_RETRY ? 1 : upstreamRetryProfile(causeHttp).maxAttempts;
+  const maxAttemptsFor = (causeHttp?: number, causeConn?: string) => AIX_DISABLE_OPERATION_RETRY ? 1 : upstreamRetryProfile(causeHttp, causeConn).maxAttempts;
   const parseContext: ChatGenerateParseContext = {
-    hasRetriesForHttpStatus: (causeHttp) => attemptNumber < maxAttemptsFor(causeHttp),
+    hasRetriesForHttpStatus: (causeHttp, causeConn) => attemptNumber < maxAttemptsFor(causeHttp, causeConn),
   };
 
   while (true) {
@@ -87,8 +87,8 @@ export async function* executeChatGenerateWithOperationRetry(
       }
 
       // sanity: exhausted attempts - must be a Parser error - as it shall have not thrown in this case (hasRetriesForHttpStatus was false)
-      const profile = upstreamRetryProfile(error.causeHttp);
-      const maxAttempts = maxAttemptsFor(error.causeHttp);
+      const profile = upstreamRetryProfile(error.causeHttp, error.causeConn);
+      const maxAttempts = maxAttemptsFor(error.causeHttp, error.causeConn);
       if (attemptNumber >= maxAttempts) {
         if (AIX_DEBUG_OPERATION_RETRY)
           console.warn(`[operation.retrier] ⚠️ Retry error on final attempt (parser bug?) - ${error?.message || error}`);
@@ -103,19 +103,26 @@ export async function* executeChatGenerateWithOperationRetry(
       attemptNumber++;
 
       // -> retry-server-operation - parent loop of retry-server-dispatch
-      yield {
-        cg: 'aix-retry-reset', rScope: 'srv-op',
-        rClearStrategy: 'since-checkpoint', // clear current-attempt content while preserving prior continuation turns
+      // Same two messages as the connect retrier (RetryAttempt), one per phase the user is told about
+      const retryAttempt: Omit<RetryAttempt, 'phase'> = {
         reason: profile.label, // calm and short for the user; the vendor text is in the server log above, and in the final error if retries run out
         attempt: attemptNumber, maxAttempts: maxAttempts, delayMs: delayMs,
         ...(error.causeHttp ? { causeHttp: error.causeHttp } : undefined),
         ...(error.causeConn ? { causeConn: error.causeConn } : undefined),
+        ...(profile.calm && { calm: true }),
       };
+
+      // 1. the attempt failed and the wait begins: clear the attempt's content (prior continuation turns stay), show the wait
+      yield { cg: 'aix-retry-reset', rScope: 'srv-op', rClearStrategy: 'since-checkpoint', ...retryAttempt, phase: 'waiting' };
 
       // If aborted during delay, let next attempt detect it and create proper terminating particle
       // (throwing here would bypass executor's particle-based messaging contract)
       // Heartbeats keep the intake stream alive through the longer waits.
-      yield* heartbeatsWhileAwaiting(delayOrAbort(delayMs, abortSignal));
+      const waited = yield* heartbeatsWhileAwaiting(delayOrAbort(delayMs, abortSignal));
+      if (waited === 'aborted') continue;
+
+      // 2. the wait is over and the attempt begins: nothing else says so until the attempt answers (nothing to clear this time)
+      yield { cg: 'aix-retry-reset', rScope: 'srv-op', rClearStrategy: 'none', ...retryAttempt, phase: 'started' };
 
       // -> loop continues for next attempt
     }
